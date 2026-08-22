@@ -1,0 +1,16 @@
+# Backend secrets
+scrapheal-backend/.env
+
+# Python
+scrapheal-backend/__pycache__/
+scrapheal-backend/*.pyc
+scrapheal-backend/.venv/
+scrapheal-backend/venv/
+
+# React
+scrapeheal-frontend/node_modules/
+scrapeheal-frontend/dist/
+
+# Environment files
+*.env
+*.env.local
