@@ -1,13 +1,15 @@
 import os
 import json
 import asyncio
+import re
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from google import genai
 
 
@@ -23,7 +25,34 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 TRIGGER_URL = "https://api.brightdata.com/dca/trigger"
 RESULT_URL = "https://api.brightdata.com/dca/dataset"
-HEAL_URL = "https://api.brightdata.com/dca/collector"
+HEAL_URL = "https://api.brightdata.com/dca/collectors"
+
+
+# =========================================================
+# URL SANITIZATION
+# =========================================================
+
+def clean_url(value: str) -> str:
+    """Clean and validate a URL before sending it to Bright Data."""
+
+    if not isinstance(value, str) or not value:
+        raise ValueError("URL is required.")
+
+    # Remove leading/trailing whitespace and all ASCII control
+    # characters such as \n, \r and \t. These characters cause httpx to
+    # reject the request with: Invalid non-printable ASCII character.
+    cleaned = value.strip()
+    cleaned = re.sub(r"[\x00-\x1f\x7f]", "", cleaned).strip()
+
+    parsed = urlparse(cleaned)
+
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("URL must start with http:// or https://")
+
+    if not parsed.netloc:
+        raise ValueError("Invalid URL: hostname is missing.")
+
+    return cleaned
 
 
 # =========================================================
@@ -96,6 +125,11 @@ app.add_middleware(
 
 class ScrapeRequest(BaseModel):
     url: str
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        return clean_url(value)
 
 
 # =========================================================
@@ -395,11 +429,13 @@ async def heal_bright_data_collector(
             json=payload,
         )
 
-        return response.status_code in [
-            200,
-            201,
-            202,
-        ]
+        if response.status_code not in [200, 201, 202]:
+            raise Exception(
+                f"Bright Data self-healing failed ({response.status_code}): "
+                f"{response.text}"
+            )
+
+        return True
 
 
 # =========================================================
@@ -448,6 +484,10 @@ async def self_heal(
 
     try:
 
+        # Pydantic already validates this, but keep a local cleaned
+        # value so every Bright Data call uses exactly the same URL.
+        target_url = clean_url(target_url)
+
         # =================================================
         # ATTEMPT 1 - INITIAL EXTRACTION
         # =================================================
@@ -462,7 +502,7 @@ async def self_heal(
 
         first_result = (
             await run_bright_data_collector(
-                request.url
+                target_url
             )
         )
 
@@ -575,7 +615,7 @@ async def self_heal(
 
         second_result = (
             await run_bright_data_collector(
-                request.url
+                target_url
             )
         )
 
