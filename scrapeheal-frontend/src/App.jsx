@@ -1,7 +1,8 @@
 import { useState } from "react";
 import "./App.css";
 
-const API_URL = "http://127.0.0.1:8000";
+const API_URL =
+  import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 const DEFAULT_URL = "https://books.toscrape.com/";
 
@@ -18,223 +19,176 @@ function App() {
     }
 
     setLoading(true);
-    setResult(null);
     setError("");
+    setResult(null);
 
     try {
-      const response = await fetch(
-        `${API_URL}/self-heal`,
-        {
-          method: "POST",
-
-          headers: {
-            "Content-Type": "application/json",
-          },
-
-          body: JSON.stringify({
-            url: url.trim(),
-          }),
-        }
-      );
+      const response = await fetch(`${API_URL}/self-heal`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          url: url.trim(),
+        }),
+      });
 
       const data = await response.json();
 
       if (!response.ok) {
         const message =
           data?.detail?.error ||
+          data?.detail?.message ||
           data?.detail ||
-          "Scraping failed.";
+          data?.message ||
+          "The extraction request failed.";
 
         throw new Error(
           typeof message === "string"
             ? message
-            : "Scraping failed."
+            : JSON.stringify(message)
         );
       }
 
       setResult(data);
-
     } catch (err) {
-      console.error(err);
+      console.error("ScrapeHeal error:", err);
 
       setError(
         err.message ||
-        "Unable to connect to the backend."
+        "Unable to connect to the ScrapeHeal backend."
       );
-
     } finally {
       setLoading(false);
     }
   };
 
-
-  /* =======================================================
-     RESULT STATE
-  ======================================================= */
+  const history = Array.isArray(result?.history)
+    ? result.history
+    : [];
 
   const analysis = result?.analysis || {};
 
-  const history = result?.history || [];
+  const issues = Array.isArray(analysis?.issues)
+    ? analysis.issues
+    : [];
 
-  /*
-     IMPORTANT:
-     Verified is TRUE only when the backend actually
-     reports success/self-healed AND Gemini's final
-     analysis says the data is valid.
-  */
+  const status = result?.status || "";
 
-  const verified =
-    (
-      result?.status === "success" ||
-      result?.status === "self_healed"
-    ) &&
-    analysis?.is_valid === true;
+  const isVerified =
+    status === "success" || status === "self_healed";
 
+  const isSelfHealed = status === "self_healed";
 
-  const selfHealed =
-    result?.status === "self_healed";
+  const isFailed =
+    status === "failed_verification" ||
+    status === "failed";
 
+  const confidence =
+    analysis?.confidence !== undefined
+      ? analysis.confidence
+      : null;
 
-  const failed =
-    result?.status === "failed";
+  const risk = getRisk(analysis, status);
 
+  const action = getAction(
+    status,
+    analysis,
+    isVerified
+  );
 
-  const action = verified
-    ? selfHealed
-      ? "Repaired"
-      : "Accept"
-    : failed
-      ? "Failed"
-      : "Review";
+  const attempts = calculateAttempts(history, status);
 
-
-  const statusTitle = verified
-    ? selfHealed
-      ? "Extraction self-healed"
-      : "Extraction verified"
-    : failed
-      ? "Extraction failed"
-      : "Extraction requires review";
-
+  const finalData = result?.final_data;
 
   return (
     <div className="app">
 
-      {/* =================================================
-          HEADER
-      ================================================= */}
+      {/* ================= HEADER ================= */}
 
       <header className="topbar">
-
         <div className="brand">
-
-          <div className="brand-logo">
-            🛡️
-          </div>
+          <div className="brand-icon">🛡️</div>
 
           <div>
+            <div className="brand-name">
+              ScrapeHeal AI
+            </div>
+
+            <div className="brand-subtitle">
+              Self-healing web extraction
+            </div>
+          </div>
+        </div>
+
+        <div className="system-status">
+          <span className="status-dot"></span>
+          SYSTEM ONLINE
+        </div>
+      </header>
+
+      {/* ================= HERO ================= */}
+
+      <main>
+
+        <section className="hero">
+
+          <div className="hero-content">
+
+            <div className="eyebrow">
+              AUTONOMOUS WEB DATA RELIABILITY
+            </div>
 
             <h1>
-              ScrapeHeal <span>AI</span>
+              Web extraction
+              <br />
+              <span>that heals itself.</span>
             </h1>
 
             <p>
-              Self-healing web extraction
+              Detect extraction anomalies, diagnose them
+              with AI, recover the extraction workflow,
+              and verify the recovered data.
             </p>
 
-          </div>
-
-        </div>
-
-
-        <div className="online-status">
-
-          <span className="online-dot"></span>
-
-          SYSTEM ONLINE
-
-        </div>
-
-      </header>
-
-
-      {/* =================================================
-          HERO
-      ================================================= */}
-
-      <section className="hero">
-
-        <div className="hero-content">
-
-          <div className="hero-label">
-            AUTONOMOUS WEB DATA RELIABILITY
-          </div>
-
-          <h2>
-            Web extraction
-            <br />
-            <span>that heals itself.</span>
-          </h2>
-
-          <p>
-            Detect extraction anomalies, diagnose them
-            with AI, repair the Bright Data scraper and
-            verify the recovered data.
-          </p>
-
-
-          <div className="technology-pills">
-
-            <span>Bright Data</span>
-
-            <span>Gemini AI</span>
-
-            <span>FastAPI</span>
-
-            <span>React</span>
+            <div className="technology-row">
+              <span>Bright Data</span>
+              <span>Gemini AI</span>
+              <span>FastAPI</span>
+              <span>React</span>
+            </div>
 
           </div>
 
-        </div>
+          <div className="hero-visual">
 
+            <div className="hero-circle">
+              🛡️
+            </div>
 
-        <div className="hero-visual">
+            <div className="floating-card detect">
+              🔎 Detect
+            </div>
 
-          <div className="orb">
-            🛡️
+            <div className="floating-card diagnose">
+              🤖 Diagnose
+            </div>
+
+            <div className="floating-card repair">
+              🔧 Repair
+            </div>
+
+            <div className="floating-card verify">
+              ✓ Verify
+            </div>
+
           </div>
 
-          <div className="floating-card card-one">
-            🔍 Detect
-          </div>
+        </section>
 
-          <div className="floating-card card-two">
-            🤖 Diagnose
-          </div>
+        {/* ================= EXTRACTION CONTROL ================= */}
 
-          <div className="floating-card card-three">
-            🔧 Repair
-          </div>
-
-          <div className="floating-card card-four">
-            ✓ Verify
-          </div>
-
-        </div>
-
-      </section>
-
-
-      {/* =================================================
-          MAIN
-      ================================================= */}
-
-      <main className="container">
-
-
-        {/* EXTRACTION */}
-
-        <section className="main-card control-card">
+        <section className="card extraction-card">
 
           <div className="section-label">
             EXTRACTION CONTROL
@@ -249,34 +203,37 @@ function App() {
             extract and validate its data.
           </p>
 
+          <div className="url-row">
 
-          <div className="url-container">
+            <div className="url-input-wrapper">
+              <span className="url-icon">
+                🌐
+              </span>
 
-            <div className="url-icon">
-              🌐
+              <input
+                type="url"
+                value={url}
+                onChange={(e) =>
+                  setUrl(e.target.value)
+                }
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !loading) {
+                    runScraper();
+                  }
+                }}
+                placeholder="https://example.com"
+                disabled={loading}
+              />
             </div>
-
-
-            <input
-              type="text"
-              value={url}
-              onChange={(e) =>
-                setUrl(e.target.value)
-              }
-              placeholder={DEFAULT_URL}
-              disabled={loading}
-            />
-
 
             <button
               className="analyze-button"
               onClick={runScraper}
               disabled={loading}
             >
-
               {loading ? (
                 <>
-                  <span className="button-spinner"></span>
+                  <span className="spinner"></span>
                   Analyzing...
                 </>
               ) : (
@@ -284,46 +241,29 @@ function App() {
                   🚀 Analyze
                 </>
               )}
-
             </button>
 
           </div>
 
+          <div className="endpoint-info">
+            Backend: {API_URL}
+          </div>
 
           {error && (
-
-            <div className="error-message">
-
-              <span>⚠️</span>
-
-              <div>
-
-                <strong>
-                  Extraction error
-                </strong>
-
-                <p>
-                  {error}
-                </p>
-
-              </div>
-
+            <div className="error-box">
+              <strong>⚠️ Extraction error</strong>
+              <p>{error}</p>
             </div>
-
           )}
 
         </section>
 
-
-        {/* =================================================
-            LOADING
-        ================================================= */}
+        {/* ================= WORKING PIPELINE ================= */}
 
         {loading && (
+          <section className="card working-card">
 
-          <section className="main-card loading-section">
-
-            <div className="loading-icon">
+            <div className="working-icon">
               ⚡
             </div>
 
@@ -333,9 +273,8 @@ function App() {
 
             <p>
               Running extraction, AI diagnosis,
-              repair and verification.
+              recovery and verification.
             </p>
-
 
             <div className="pipeline">
 
@@ -343,234 +282,200 @@ function App() {
                 number="1"
                 title="Bright Data"
                 subtitle="Extract"
+                active
               />
 
-              <div className="pipeline-line"></div>
+              <PipelineLine />
 
               <PipelineStep
                 number="2"
                 title="Gemini AI"
                 subtitle="Diagnose"
+                active
               />
 
-              <div className="pipeline-line"></div>
+              <PipelineLine />
 
               <PipelineStep
                 number="3"
                 title="Repair"
                 subtitle="Recover"
+                active
               />
 
-              <div className="pipeline-line"></div>
+              <PipelineLine />
 
               <PipelineStep
                 number="4"
                 title="Verify"
                 subtitle="Trust"
+                active
               />
 
             </div>
 
           </section>
-
         )}
 
-
-        {/* =================================================
-            RESULT
-        ================================================= */}
+        {/* ================= RESULT ================= */}
 
         {result && !loading && (
-
           <>
+            <section className="card result-card">
 
-            {/* STATUS */}
+              <div className="result-header">
 
-            <section className="result-header">
+                <div>
 
-              <div>
+                  <div className="section-label">
+                    SCRAPING RESULT
+                  </div>
 
-                <div className="section-label">
-                  SCRAPING RESULT
+                  <h2>
+                    {isSelfHealed
+                      ? "Extraction self-healed"
+                      : isVerified
+                        ? "Extraction verified"
+                        : "Extraction requires review"}
+                  </h2>
+
+                  <p className="result-url">
+                    {url}
+                  </p>
+
                 </div>
 
-                <h2>
-                  {statusTitle}
-                </h2>
-
-                <p>
-                  {url}
-                </p>
-
-              </div>
-
-
-              <div
-                className={
-                  verified
-                    ? "verification-badge"
-                    : "failure-badge"
-                }
-              >
-
-                {verified
-                  ? selfHealed
-                    ? "✓ SELF-HEALED"
-                    : "✓ VERIFIED"
-                  : "✕ REVIEW"}
+                <StatusBadge
+                  verified={isVerified}
+                  selfHealed={isSelfHealed}
+                  failed={isFailed}
+                />
 
               </div>
 
             </section>
 
-
-            {/* METRICS */}
+            {/* ================= METRICS ================= */}
 
             <section className="metrics-grid">
 
-              <Metric
+              <MetricCard
                 icon="🔄"
                 title="Attempts"
-                value={result.attempts ?? 0}
+                value={attempts}
+                description={
+                  attempts === 1
+                    ? "Initial extraction"
+                    : "Extraction attempts"
+                }
               />
 
-
-              <Metric
+              <MetricCard
                 icon="🎯"
                 title="Confidence"
                 value={
-                  `${analysis.confidence ?? 0}%`
+                  confidence !== null
+                    ? `${confidence}%`
+                    : "—"
                 }
+                description="AI assessment"
               />
 
-
-              <Metric
+              <MetricCard
                 icon="🛡️"
                 title="Risk"
-                value={
-                  capitalize(
-                    analysis.risk_level ||
-                    "unknown"
-                  )
-                }
+                value={risk}
+                description="Data reliability"
               />
 
-
-              <Metric
+              <MetricCard
                 icon="⚡"
                 title="Action"
                 value={action}
+                description="Recommended state"
               />
 
             </section>
 
+            {/* ================= AI ANALYSIS ================= */}
 
-            {/* AI DIAGNOSTICS */}
-
-            <section className="main-card">
+            <section className="card analysis-card">
 
               <div className="section-label">
-                AI DIAGNOSTICS
+                AI RELIABILITY ANALYSIS
               </div>
 
               <h2>
-                🤖 AI Reliability Analysis
+                🤖 Gemini Analysis
               </h2>
 
+              <div className="analysis-status">
 
-              <div
-                className={
-                  verified
-                    ? "analysis-good"
-                    : "analysis-warning"
-                }
-              >
-
-                <div className="analysis-icon">
-
-                  {verified
+                <div
+                  className={
+                    analysis?.is_valid
+                      ? "analysis-icon success"
+                      : "analysis-icon warning"
+                  }
+                >
+                  {analysis?.is_valid
                     ? "✓"
-                    : "⚠️"}
-
+                    : "!"}
                 </div>
-
 
                 <div>
 
                   <h3>
-
-                    {verified
-                      ? selfHealed
-                        ? "Data successfully recovered"
-                        : "Data appears reliable"
-                      : failed
-                        ? "Extraction could not be verified"
-                        : "Extraction requires attention"}
-
+                    {analysis?.is_valid
+                      ? "Data appears reliable"
+                      : "Potential extraction anomaly detected"}
                   </h3>
 
-
                   <p>
-
-                    {analysis.explanation ||
-                      "No AI explanation was returned."}
-
+                    {analysis?.is_valid
+                      ? "The extracted output passed the AI reliability checks."
+                      : "Gemini identified one or more conditions that require attention."}
                   </p>
 
                 </div>
 
               </div>
 
+              {/* Issues */}
 
-              {/* ISSUES */}
-
-              {analysis.issues?.length > 0 && (
-
+              {issues.length > 0 && (
                 <div className="issues-section">
 
                   <h3>
-                    Detected anomalies
+                    Detected issues
                   </h3>
-
 
                   <div className="issues-list">
 
-                    {analysis.issues.map(
-                      (issue, index) => (
-
-                        <div
-                          className="issue-item"
-                          key={index}
-                        >
-
-                          <span className="issue-number">
-                            {index + 1}
-                          </span>
-
-                          <span>
-                            {issue}
-                          </span>
-
-                        </div>
-
-                      )
-                    )}
+                    {issues.map((issue, index) => (
+                      <div
+                        className="issue-item"
+                        key={index}
+                      >
+                        <span>⚠️</span>
+                        <span>
+                          {String(issue)}
+                        </span>
+                      </div>
+                    ))}
 
                   </div>
 
                 </div>
-
               )}
 
+              {/* Repair strategy */}
 
-              {/* REPAIR */}
+              {analysis?.repair_instruction && (
+                <div className="repair-box">
 
-              {analysis.repair_instruction && (
-
-                <div className="repair-strategy">
-
-                  <div className="repair-heading">
-                    🔧 Repair Strategy
+                  <div className="repair-title">
+                    🔧 Repair strategy
                   </div>
 
                   <p>
@@ -578,39 +483,99 @@ function App() {
                   </p>
 
                 </div>
-
               )}
 
             </section>
 
+            {/* ================= PIPELINE ================= */}
 
-            {/* =================================================
-                HISTORY
-            ================================================= */}
-
-            <section className="main-card">
+            <section className="card pipeline-result-card">
 
               <div className="section-label">
-                AUDIT TRAIL
+                RECOVERY PIPELINE
               </div>
 
               <h2>
-                Recovery History
+                Extraction workflow
               </h2>
 
-              <p className="section-description">
-                A transparent record of every action
-                performed by the extraction pipeline.
-              </p>
+              <div className="result-pipeline">
 
+                <PipelineResultStep
+                  number="1"
+                  title="Bright Data"
+                  subtitle="Extracted"
+                  done
+                />
 
-              <div className="history">
+                <PipelineLine />
 
-                {history.map(
-                  (item, index) => (
+                <PipelineResultStep
+                  number="2"
+                  title="Gemini AI"
+                  subtitle="Analyzed"
+                  done
+                />
+
+                <PipelineLine />
+
+                <PipelineResultStep
+                  number="3"
+                  title="Repair"
+                  subtitle={
+                    isSelfHealed
+                      ? "Applied"
+                      : analysis?.is_valid
+                        ? "Not required"
+                        : "Evaluated"
+                  }
+                  done={
+                    isSelfHealed ||
+                    analysis?.is_valid
+                  }
+                />
+
+                <PipelineLine />
+
+                <PipelineResultStep
+                  number="4"
+                  title="Verify"
+                  subtitle={
+                    isVerified
+                      ? "Verified"
+                      : "Review"
+                  }
+                  done={isVerified}
+                />
+
+              </div>
+
+            </section>
+
+            {/* ================= RECOVERY HISTORY ================= */}
+
+            {history.length > 0 && (
+              <section className="card history-card">
+
+                <div className="section-label">
+                  AUDIT TRAIL
+                </div>
+
+                <h2>
+                  Recovery History
+                </h2>
+
+                <p className="section-description">
+                  A step-by-step record of what happened
+                  during the extraction reliability workflow.
+                </p>
+
+                <div className="history-list">
+
+                  {history.map((item, index) => (
 
                     <div
-                      className="history-row"
+                      className="history-item"
                       key={index}
                     >
 
@@ -618,224 +583,317 @@ function App() {
                         {index + 1}
                       </div>
 
+                      <div className="history-content">
 
-                      <div className="history-info">
-
-                        <strong>
+                        <div className="history-title">
                           {formatAction(
-                            item.action
+                            item?.action
                           )}
-                        </strong>
+                        </div>
 
+                        {item?.issues &&
+                          Array.isArray(item.issues) &&
+                          item.issues.length > 0 && (
+                            <div className="history-detail">
+                              {item.issues.join(
+                                " • "
+                              )}
+                            </div>
+                          )}
 
-                        {item.issues?.length > 0 && (
-
-                          <div className="history-issues">
-
-                            {item.issues.map(
-                              (issue, i) => (
-
-                                <span key={i}>
-                                  {issue}
-                                </span>
-
-                              )
-                            )}
-
+                        {item?.message && (
+                          <div className="history-detail">
+                            {item.message}
                           </div>
-
                         )}
 
                       </div>
 
-
-                      <div
-                        className={
-                          item.status === "failed"
-                            ? "history-failed"
-                            : "history-status"
-                        }
-                      >
-
-                        {item.status === "failed"
-                          ? "✕"
-                          : "✓"}
-
+                      <div className="history-check">
+                        ✓
                       </div>
 
                     </div>
 
-                  )
-                )}
+                  ))}
 
-              </div>
+                </div>
 
-            </section>
+              </section>
+            )}
 
+            {/* ================= FINAL DATA ================= */}
 
-            {/* =================================================
-                FINAL DATA
-            ================================================= */}
-
-            <section className="main-card">
+            <section className="card data-card">
 
               <div className="section-label">
                 VERIFIED OUTPUT
               </div>
 
               <h2>
-                📦 Extracted Data
+                Extracted Data
               </h2>
 
               <p className="section-description">
-                The final data returned by the extraction
-                pipeline.
+                Structured output returned by the
+                extraction reliability pipeline.
               </p>
 
-
               <pre className="json-output">
-
-                {JSON.stringify(
-                  result.final_data,
-                  null,
-                  2
-                )}
-
+                {formatJSON(finalData)}
               </pre>
 
             </section>
 
           </>
-
         )}
 
+        {/* ================= FOOTER ================= */}
+
+        <footer>
+
+          <div>
+            🛡️ <strong>ScrapeHeal AI</strong>
+          </div>
+
+          <div>
+            Bright Data × Gemini AI × FastAPI × React
+          </div>
+
+        </footer>
+
       </main>
-
-
-      {/* FOOTER */}
-
-      <footer>
-
-        <div>
-
-          <strong>
-            ScrapeHeal AI
-          </strong>
-
-          <span>
-            Autonomous web data reliability
-          </span>
-
-        </div>
-
-
-        <div>
-          Powered by
-          <strong>
-            {" "}Bright Data + Gemini AI
-          </strong>
-        </div>
-
-      </footer>
-
     </div>
   );
 }
-
 
 /* =========================================================
    COMPONENTS
 ========================================================= */
 
-function Metric({
+function PipelineStep({
+  number,
+  title,
+  subtitle,
+  active,
+}) {
+  return (
+    <div
+      className={`pipeline-step ${active ? "active" : ""
+        }`}
+    >
+      <div className="pipeline-number">
+        {number}
+      </div>
+
+      <strong>{title}</strong>
+
+      <span>{subtitle}</span>
+    </div>
+  );
+}
+
+function PipelineResultStep({
+  number,
+  title,
+  subtitle,
+  done,
+}) {
+  return (
+    <div className="pipeline-step">
+
+      <div
+        className={`pipeline-number ${done ? "completed" : ""
+          }`}
+      >
+        {done ? "✓" : number}
+      </div>
+
+      <strong>{title}</strong>
+
+      <span>{subtitle}</span>
+
+    </div>
+  );
+}
+
+function PipelineLine() {
+  return (
+    <div className="pipeline-line"></div>
+  );
+}
+
+function MetricCard({
   icon,
   title,
   value,
+  description,
 }) {
-
   return (
-
     <div className="metric-card">
 
       <div className="metric-icon">
         {icon}
       </div>
 
-      <div className="metric-info">
+      <div className="metric-content">
 
-        <span>
+        <div className="metric-title">
           {title}
-        </span>
+        </div>
 
-        <strong>
+        <div className="metric-value">
           {value}
-        </strong>
+        </div>
+
+        <div className="metric-description">
+          {description}
+        </div>
 
       </div>
 
     </div>
-
   );
 }
 
-
-function PipelineStep({
-  number,
-  title,
-  subtitle,
+function StatusBadge({
+  verified,
+  selfHealed,
+  failed,
 }) {
+  if (selfHealed) {
+    return (
+      <div className="status-badge healed">
+        ✓ SELF-HEALED
+      </div>
+    );
+  }
+
+  if (verified) {
+    return (
+      <div className="status-badge verified">
+        ✓ VERIFIED
+      </div>
+    );
+  }
+
+  if (failed) {
+    return (
+      <div className="status-badge failed">
+        ⚠ REVIEW
+      </div>
+    );
+  }
 
   return (
-
-    <div className="pipeline-step active">
-
-      <span>
-        {number}
-      </span>
-
-      <strong>
-        {title}
-      </strong>
-
-      <small>
-        {subtitle}
-      </small>
-
+    <div className="status-badge failed">
+      ⚠ REVIEW
     </div>
-
   );
 }
-
 
 /* =========================================================
    HELPERS
 ========================================================= */
 
-function capitalize(value) {
-
-  if (!value) {
-    return "";
+function calculateAttempts(history, status) {
+  if (!history.length) {
+    return status === "success" ||
+      status === "self_healed"
+      ? 1
+      : 1;
   }
 
-  return (
-    value.charAt(0).toUpperCase() +
-    value.slice(1)
+  const scrapeEvents = history.filter(
+    (item) => {
+      const action = String(
+        item?.action || ""
+      ).toLowerCase();
+
+      return (
+        action.includes("scrape") ||
+        action.includes("extraction") ||
+        action.includes("re-run") ||
+        action.includes("rerun") ||
+        action.includes("re_extract")
+      );
+    }
+  );
+
+  return Math.max(
+    1,
+    scrapeEvents.length
   );
 }
 
-
-function formatAction(action) {
-
-  if (!action) {
-    return "Processing step";
+function getRisk(analysis, status) {
+  if (analysis?.is_valid === true) {
+    return "Low";
   }
 
-  return action
+  if (status === "self_healed") {
+    return "Low";
+  }
+
+  if (analysis?.issues?.length >= 3) {
+    return "High";
+  }
+
+  if (analysis?.issues?.length > 0) {
+    return "Medium";
+  }
+
+  return "—";
+}
+
+function getAction(
+  status,
+  analysis,
+  verified
+) {
+  if (status === "self_healed") {
+    return "Verified";
+  }
+
+  if (verified) {
+    return "Accept";
+  }
+
+  if (
+    analysis?.is_valid === false
+  ) {
+    return "Review";
+  }
+
+  return "Review";
+}
+
+function formatAction(action) {
+  if (!action) {
+    return "Pipeline step completed";
+  }
+
+  return String(action)
     .replaceAll("_", " ")
     .replace(/\b\w/g, (letter) =>
       letter.toUpperCase()
     );
 }
 
+function formatJSON(data) {
+  if (data === undefined) {
+    return "No extracted data returned.";
+  }
+
+  try {
+    return JSON.stringify(
+      data,
+      null,
+      2
+    );
+  } catch {
+    return String(data);
+  }
+}
 
 export default App;
