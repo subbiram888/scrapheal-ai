@@ -7,7 +7,7 @@ const API_URL =
 const DEFAULT_URL = "https://books.toscrape.com/";
 
 /* =========================================================
-   URL CLEANING
+   URL CLEANING - IMPROVED FOR VERCEL
 ========================================================= */
 
 function cleanUrl(value) {
@@ -17,16 +17,19 @@ function cleanUrl(value) {
 
   let cleaned = String(value);
 
-  // Remove ALL ASCII control characters including \n, \r and \t
+  // Remove ALL whitespace characters including \n, \r, \t, and spaces
+  cleaned = cleaned.replace(/\s+/g, "");
+
+  // Remove ALL ASCII control characters
   cleaned = cleaned.replace(/[\u0000-\u001F\u007F]/g, "");
 
   // Remove accidental quotes
   cleaned = cleaned.replace(/^["']+|["']+$/g, "");
 
-  // Remove spaces
-  cleaned = cleaned.replace(/\s/g, "");
+  // Remove any remaining suspicious characters
+  cleaned = cleaned.trim();
 
-  return cleaned.trim();
+  return cleaned;
 }
 
 /* =========================================================
@@ -80,16 +83,16 @@ export default function App() {
   const [error, setError] = useState("");
 
   /* =======================================================
-     HANDLE URL INPUT
+     HANDLE URL INPUT - AGGRESSIVE CLEANING
   ======================================================= */
 
   const handleUrlChange = (event) => {
     const value = event.target.value;
 
-    // Clean immediately while typing
-    const cleaned = value
-      .replace(/[\u0000-\u001F\u007F]/g, "")
-      .replace(/[\r\n\t]/g, "");
+    // Aggressive cleaning while typing
+    let cleaned = value
+      .replace(/[\s\n\r\t]+/g, "") // Remove ALL whitespace
+      .replace(/[\u0000-\u001F\u007F]/g, ""); // Remove control chars
 
     setUrl(cleaned);
 
@@ -107,20 +110,11 @@ export default function App() {
     setError("");
     setResult(null);
 
-    /*
-      IMPORTANT:
-      Clean the URL one final time immediately
-      before sending it to FastAPI.
-    */
-
+    // Final cleaning before sending
     const targetUrl = cleanUrl(url);
 
     console.log("Original URL:", JSON.stringify(url));
-
-    console.log(
-      "Clean URL:",
-      JSON.stringify(targetUrl)
-    );
+    console.log("Clean URL:", JSON.stringify(targetUrl));
 
     if (!targetUrl) {
       setError("Please enter a website URL.");
@@ -137,42 +131,22 @@ export default function App() {
     setLoading(true);
 
     try {
-      /*
-        Remove any accidental slash from API_URL
-        before adding /self-heal.
-      */
+      // Remove any accidental trailing slash from API_URL
+      const backendUrl = API_URL.replace(/\/+$/, "");
+      const endpoint = `${backendUrl}/self-heal`;
 
-      const backendUrl =
-        API_URL.replace(/\/+$/, "");
-
-      const endpoint =
-        `${backendUrl}/self-heal`;
-
-      console.log(
-        "ScrapeHeal API endpoint:",
-        endpoint
-      );
-
-      /*
-        Send ONLY the cleaned URL.
-      */
+      console.log("Backend endpoint:", endpoint);
 
       const response = await fetch(endpoint, {
         method: "POST",
-
         headers: {
           "Content-Type": "application/json",
           Accept: "application/json",
         },
-
         body: JSON.stringify({
           url: targetUrl,
         }),
       });
-
-      /*
-        Read response safely.
-      */
 
       const contentType =
         response.headers.get("content-type") || "";
@@ -185,28 +159,19 @@ export default function App() {
         data = await response.json();
       } else {
         const text = await response.text();
-
         throw new Error(
           text ||
           `Backend returned HTTP ${response.status}`
         );
       }
 
-      /*
-        Backend error
-      */
-
       if (!response.ok) {
         let message =
           `Request failed with status ${response.status}.`;
 
-        if (
-          typeof data?.detail === "string"
-        ) {
+        if (typeof data?.detail === "string") {
           message = data.detail;
-        }
-
-        else if (
+        } else if (
           data?.detail &&
           typeof data.detail === "object"
         ) {
@@ -214,38 +179,22 @@ export default function App() {
             data.detail.error ||
             data.detail.message ||
             JSON.stringify(data.detail);
-        }
-
-        else if (data?.error) {
+        } else if (data?.error) {
           message = data.error;
         }
 
         throw new Error(message);
       }
 
-      /*
-        SUCCESS
-      */
-
-      console.log(
-        "ScrapeHeal response:",
-        data
-      );
-
+      console.log("ScrapeHeal response:", data);
       setResult(data);
 
     } catch (err) {
-
-      console.error(
-        "ScrapeHeal error:",
-        err
-      );
-
+      console.error("ScrapeHeal error:", err);
       setError(
         err?.message ||
         "Failed to connect to ScrapeHeal backend."
       );
-
     } finally {
       setLoading(false);
     }
@@ -261,7 +210,6 @@ export default function App() {
       !loading
     ) {
       event.preventDefault();
-
       handleAnalyze();
     }
   };

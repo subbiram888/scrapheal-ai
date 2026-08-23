@@ -48,13 +48,46 @@ app = FastAPI(
 )
 
 
+# =========================================================
+# CORS CONFIGURATION - VERCEL FIX
+# =========================================================
+
+# Allow requests from:
+# 1. All Vercel preview/production domains
+# 2. Local development
+# 3. Any subdomain during testing
+
+ALLOWED_ORIGINS = [
+    # Local development
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:8000",
+    
+    # Vercel production (update with your actual domain)
+    "https://scrapheal-ai.vercel.app",
+    
+    # Vercel preview deployments (allow all *.vercel.app)
+    # Note: These are regex patterns
+]
+
+# More permissive CORS for development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex="http.*localhost.*|.*\.vercel\.app",  # Allow localhost and all Vercel domains
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Accept", "Authorization"],
+    max_age=3600,
 )
+
+# Alternatively, for strict production use:
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=ALLOWED_ORIGINS,
+#     allow_credentials=False,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
 
 
 # =========================================================
@@ -262,7 +295,7 @@ DATA:
 
     response = await asyncio.to_thread(
         gemini.models.generate_content,
-        model="gemini-3.6-flash",
+        model="gemini-2.0-flash",
         contents=prompt,
     )
 
