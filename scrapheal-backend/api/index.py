@@ -25,34 +25,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 TRIGGER_URL = "https://api.brightdata.com/dca/trigger"
 RESULT_URL = "https://api.brightdata.com/dca/dataset"
-HEAL_URL = "https://api.brightdata.com/dca/collectors"
-
-
-# =========================================================
-# URL SANITIZATION
-# =========================================================
-
-def clean_url(value: str) -> str:
-    """Clean and validate a URL before sending it to Bright Data."""
-
-    if not isinstance(value, str) or not value:
-        raise ValueError("URL is required.")
-
-    # Remove leading/trailing whitespace and all ASCII control
-    # characters such as \n, \r and \t. These characters cause httpx to
-    # reject the request with: Invalid non-printable ASCII character.
-    cleaned = value.strip()
-    cleaned = re.sub(r"[\x00-\x1f\x7f]", "", cleaned).strip()
-
-    parsed = urlparse(cleaned)
-
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError("URL must start with http:// or https://")
-
-    if not parsed.netloc:
-        raise ValueError("Invalid URL: hostname is missing.")
-
-    return cleaned
+HEAL_URL = "https://api.brightdata.com/dca/collector"
 
 
 # =========================================================
@@ -78,45 +51,53 @@ app = FastAPI(
 
 
 # =========================================================
-# CORS CONFIGURATION - VERCEL FIX
+# CORS
 # =========================================================
 
-# Allow requests from:
-# 1. All Vercel preview/production domains
-# 2. Local development
-# 3. Any subdomain during testing
-
-ALLOWED_ORIGINS = [
-    # Local development
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "http://localhost:8000",
-    
-    # Vercel production (update with your actual domain)
-    "https://scrapheal-ai.vercel.app",
-    
-    # Vercel preview deployments (allow all *.vercel.app)
-    # Note: These are regex patterns
-]
-
-# More permissive CORS for development
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex="http.*localhost.*|.*\.vercel\.app",  # Allow localhost and all Vercel domains
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?|https://.*\.vercel\.app",
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Accept", "Authorization"],
+    allow_methods=["*"],
+    allow_headers=["*"],
     max_age=3600,
 )
 
-# Alternatively, for strict production use:
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=ALLOWED_ORIGINS,
-#     allow_credentials=False,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
+
+# =========================================================
+# URL CLEANING
+# =========================================================
+
+def clean_url(value: str) -> str:
+    """
+    Clean and validate URL before sending it to Bright Data.
+    Removes newline, tab, carriage return and other
+    non-printable ASCII characters.
+    """
+
+    if not value:
+        raise ValueError("URL is required")
+
+    # Remove leading/trailing whitespace
+    value = value.strip()
+
+    # Remove non-printable ASCII characters
+    value = re.sub(r"[\x00-\x1f\x7f]", "", value)
+
+    # Final trim
+    value = value.strip()
+
+    parsed = urlparse(value)
+
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(
+            "URL must start with http:// or https://"
+        )
+
+    if not parsed.netloc:
+        raise ValueError("Invalid URL")
+
+    return value
 
 
 # =========================================================
@@ -124,6 +105,7 @@ app.add_middleware(
 # =========================================================
 
 class ScrapeRequest(BaseModel):
+
     url: str
 
     @field_validator("url")
@@ -133,7 +115,7 @@ class ScrapeRequest(BaseModel):
 
 
 # =========================================================
-# BRIGHT DATA SCRAPER
+# BRIGHT DATA EXTRACTION
 # =========================================================
 
 async def run_bright_data_collector(
@@ -150,6 +132,9 @@ async def run_bright_data_collector(
             "BRIGHT_DATA_COLLECTOR_ID is missing."
         )
 
+    # Always clean again before sending to Bright Data
+    url = clean_url(url)
+
     headers = {
         "Authorization": f"Bearer {BRIGHT_DATA_API_TOKEN}",
         "Content-Type": "application/json",
@@ -164,10 +149,6 @@ async def run_bright_data_collector(
     async with httpx.AsyncClient(
         timeout=90.0
     ) as client:
-
-        # -------------------------------------------------
-        # TRIGGER
-        # -------------------------------------------------
 
         response = await client.post(
             trigger_endpoint,
@@ -199,13 +180,13 @@ async def run_bright_data_collector(
 
         if not collection_id:
             raise Exception(
-                f"Bright Data did not return a collection ID: "
+                "Bright Data did not return a collection ID: "
                 f"{trigger_data}"
             )
 
-        # -------------------------------------------------
+        # =================================================
         # POLL RESULT
-        # -------------------------------------------------
+        # =================================================
 
         result_endpoint = (
             f"{RESULT_URL}?id={collection_id}"
@@ -267,12 +248,11 @@ async def analyze_with_gemini(
     )
 
     prompt = f"""
-You are ScrapeHeal AI, a web extraction reliability
-engine.
+You are ScrapeHeal AI, a web extraction reliability engine.
 
 Analyze the scraped JSON data below.
 
-Determine whether the extraction is actually reliable.
+Determine whether the extraction is reliable.
 
 Check for:
 
@@ -286,13 +266,11 @@ Check for:
 8. Inconsistent structure
 9. Suspicious extraction results
 
-IMPORTANT:
-
 Do not invent an anomaly.
 
 If the data is valid, say it is valid.
 
-If an anomaly exists, clearly explain it.
+If an anomaly exists, explain it clearly.
 
 Return ONLY valid JSON.
 
@@ -336,54 +314,43 @@ DATA:
     text = response.text.strip()
 
     if text.startswith("```"):
-        text = text.replace(
-            "```json",
-            "",
-        ).replace(
-            "```",
-            "",
-        ).strip()
+        text = (
+            text.replace("```json", "")
+            .replace("```", "")
+            .strip()
+        )
 
     try:
         analysis = json.loads(text)
+
     except Exception:
         raise Exception(
             f"Gemini returned invalid JSON: {text}"
         )
 
-    # -----------------------------------------------------
-    # NORMALIZE
-    # -----------------------------------------------------
-
     return {
         "is_valid": bool(
             analysis.get("is_valid", False)
         ),
-
         "confidence": int(
             analysis.get("confidence", 0)
         ),
-
         "risk_level": analysis.get(
             "risk_level",
             "unknown",
         ),
-
         "issues": analysis.get(
             "issues",
             [],
         ),
-
         "explanation": analysis.get(
             "explanation",
             "",
         ),
-
         "repair_instruction": analysis.get(
             "repair_instruction",
             "",
         ),
-
         "recommended_action": analysis.get(
             "recommended_action",
             "review",
@@ -401,6 +368,9 @@ async def heal_bright_data_collector(
 ) -> bool:
 
     if not BRIGHT_DATA_API_TOKEN:
+        return False
+
+    if not collector_id:
         return False
 
     endpoint = (
@@ -429,17 +399,15 @@ async def heal_bright_data_collector(
             json=payload,
         )
 
-        if response.status_code not in [200, 201, 202]:
-            raise Exception(
-                f"Bright Data self-healing failed ({response.status_code}): "
-                f"{response.text}"
-            )
-
-        return True
+        return response.status_code in [
+            200,
+            201,
+            202,
+        ]
 
 
 # =========================================================
-# HEALTH
+# HOME
 # =========================================================
 
 @app.get("/")
@@ -451,6 +419,10 @@ def home():
         "version": "4.0.0",
     }
 
+
+# =========================================================
+# HEALTH
+# =========================================================
 
 @app.get("/health")
 def health():
@@ -464,6 +436,42 @@ def health():
         ),
 
         "gemini": bool(
+            GEMINI_API_KEY
+        ),
+    }
+
+
+# =========================================================
+# CONFIG DIAGNOSTICS
+# =========================================================
+
+@app.get("/config")
+def config():
+
+    collector = (
+        BRIGHT_DATA_COLLECTOR_ID or ""
+    ).strip()
+
+    return {
+        "bright_data_token_present": bool(
+            BRIGHT_DATA_API_TOKEN
+        ),
+
+        "collector_present": bool(
+            collector
+        ),
+
+        "collector_format_valid": collector.startswith(
+            "c_"
+        ),
+
+        "collector_preview": (
+            collector[:8] + "..."
+            if collector
+            else ""
+        ),
+
+        "gemini_key_present": bool(
             GEMINI_API_KEY
         ),
     }
@@ -484,9 +492,20 @@ async def self_heal(
 
     try:
 
-        # Pydantic already validates this, but keep a local cleaned
-        # value so every Bright Data call uses exactly the same URL.
-        target_url = clean_url(target_url)
+        # =================================================
+        # IMPORTANT FIX
+        # =================================================
+
+        # Clean the URL BEFORE using it.
+        # This fixes:
+        #
+        # Invalid non-printable ASCII character in URL
+        #
+        # and:
+        #
+        # cannot access local variable 'target_url'
+        #
+        target_url = clean_url(request.url)
 
         # =================================================
         # ATTEMPT 1 - INITIAL EXTRACTION
@@ -517,15 +536,17 @@ async def self_heal(
         history.append({
             "step": len(history) + 1,
             "action": "gemini_diagnosis",
-            "status": "completed",
+            "status": "running",
         })
 
         analysis = await analyze_with_gemini(
             current_data
         )
 
+        history[-1]["status"] = "completed"
+
         # =================================================
-        # VALID DATA
+        # DATA IS VALID
         # =================================================
 
         if analysis["is_valid"]:
@@ -538,13 +559,10 @@ async def self_heal(
 
             return {
                 "status": "success",
-
                 "attempts": attempts,
-
+                "url": target_url,
                 "final_data": current_data,
-
                 "analysis": analysis,
-
                 "history": history,
             }
 
@@ -589,20 +607,17 @@ async def self_heal(
 
             return {
                 "status": "failed",
-
                 "attempts": attempts,
-
+                "url": target_url,
                 "final_data": current_data,
-
                 "analysis": analysis,
-
                 "history": history,
             }
 
         history[-1]["status"] = "completed"
 
         # =================================================
-        # ATTEMPT 2 - AFTER REPAIR
+        # ATTEMPT 2 - RE-EXTRACTION
         # =================================================
 
         attempts += 1
@@ -624,7 +639,7 @@ async def self_heal(
         history[-1]["status"] = "completed"
 
         # =================================================
-        # VERIFY REPAIRED DATA WITH GEMINI
+        # GEMINI VERIFICATION
         # =================================================
 
         history.append({
@@ -640,7 +655,7 @@ async def self_heal(
         )
 
         # =================================================
-        # REPAIR SUCCESS
+        # SUCCESS
         # =================================================
 
         if final_analysis["is_valid"]:
@@ -649,33 +664,38 @@ async def self_heal(
 
             return {
                 "status": "self_healed",
-
                 "attempts": attempts,
-
+                "url": target_url,
                 "final_data": repaired_data,
-
                 "analysis": final_analysis,
-
                 "history": history,
             }
 
         # =================================================
-        # REPAIR DID NOT FIX DATA
+        # REPAIR FAILED
         # =================================================
 
         history[-1]["status"] = "failed"
 
         return {
             "status": "failed",
-
             "attempts": attempts,
-
+            "url": target_url,
             "final_data": repaired_data,
-
             "analysis": final_analysis,
-
             "history": history,
         }
+
+    except ValueError as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": str(e),
+                "attempts": attempts,
+                "history": history,
+            },
+        )
 
     except Exception as e:
 
