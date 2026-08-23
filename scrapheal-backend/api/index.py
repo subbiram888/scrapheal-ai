@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 import httpx
 from dotenv import load_dotenv
@@ -17,13 +18,61 @@ from google import genai
 
 load_dotenv()
 
-BRIGHT_DATA_API_TOKEN = os.getenv("BRIGHT_DATA_API_TOKEN")
-BRIGHT_DATA_COLLECTOR_ID = os.getenv("BRIGHT_DATA_COLLECTOR_ID")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-TRIGGER_URL = "https://api.brightdata.com/dca/trigger"
-RESULT_URL = "https://api.brightdata.com/dca/dataset"
-HEAL_URL = "https://api.brightdata.com/dca/collector"
+# =========================================================
+# ENVIRONMENT VARIABLE CLEANER
+# =========================================================
+
+def clean_env(value):
+    """
+    Removes accidental newlines, tabs and other
+    whitespace/control characters from environment
+    variables.
+    """
+
+    if value is None:
+        return None
+
+    cleaned = str(value)
+
+    # Remove ASCII control characters
+    cleaned = "".join(
+        char
+        for char in cleaned
+        if ord(char) >= 32 and ord(char) != 127
+    )
+
+    return cleaned.strip()
+
+
+BRIGHT_DATA_API_TOKEN = clean_env(
+    os.getenv("BRIGHT_DATA_API_TOKEN")
+)
+
+BRIGHT_DATA_COLLECTOR_ID = clean_env(
+    os.getenv("BRIGHT_DATA_COLLECTOR_ID")
+)
+
+GEMINI_API_KEY = clean_env(
+    os.getenv("GEMINI_API_KEY")
+)
+
+
+# =========================================================
+# BRIGHT DATA ENDPOINTS
+# =========================================================
+
+TRIGGER_URL = (
+    "https://api.brightdata.com/dca/trigger"
+)
+
+RESULT_URL = (
+    "https://api.brightdata.com/dca/dataset"
+)
+
+HEAL_URL = (
+    "https://api.brightdata.com/dca/collector"
+)
 
 
 # =========================================================
@@ -43,16 +92,27 @@ gemini = (
 
 app = FastAPI(
     title="ScrapeHeal AI",
-    description="AI-powered self-healing web extraction using Bright Data and Gemini",
+    description=(
+        "AI-powered self-healing web extraction "
+        "using Bright Data and Gemini"
+    ),
     version="4.0.0",
 )
 
 
+# =========================================================
+# CORS
+# =========================================================
+
 app.add_middleware(
     CORSMiddleware,
+
     allow_origins=["*"],
+
     allow_credentials=False,
+
     allow_methods=["*"],
+
     allow_headers=["*"],
 )
 
@@ -66,12 +126,89 @@ class ScrapeRequest(BaseModel):
 
 
 # =========================================================
+# URL CLEANER
+# =========================================================
+
+def clean_url(value: str) -> str:
+    """
+    Cleans a URL before sending it to Bright Data.
+
+    This specifically prevents errors such as:
+
+    Invalid non-printable ASCII character in URL,
+    '\\n'
+    """
+
+    if value is None:
+        raise ValueError(
+            "URL is required."
+        )
+
+    value = str(value)
+
+    # Remove ASCII control characters
+    cleaned = "".join(
+        char
+        for char in value
+        if ord(char) >= 32 and ord(char) != 127
+    )
+
+    # Remove leading/trailing whitespace
+    cleaned = cleaned.strip()
+
+    # Remove accidental surrounding quotes
+    cleaned = cleaned.strip(
+        "\"'"
+    )
+
+    # Remove whitespace/control characters again
+    cleaned = "".join(
+        char
+        for char in cleaned
+        if not char.isspace()
+    )
+
+    if not cleaned:
+        raise ValueError(
+            "URL cannot be empty."
+        )
+
+    # Validate URL
+    parsed = urlparse(cleaned)
+
+    if parsed.scheme not in [
+        "http",
+        "https",
+    ]:
+        raise ValueError(
+            "URL must start with http:// or https://"
+        )
+
+    if not parsed.netloc:
+        raise ValueError(
+            "Invalid website URL."
+        )
+
+    return cleaned
+
+
+# =========================================================
 # BRIGHT DATA SCRAPER
 # =========================================================
 
 async def run_bright_data_collector(
     url: str,
 ) -> Dict[str, Any]:
+
+    # -----------------------------------------------------
+    # Clean URL one more time
+    # -----------------------------------------------------
+
+    url = clean_url(url)
+
+    # -----------------------------------------------------
+    # Check credentials
+    # -----------------------------------------------------
 
     if not BRIGHT_DATA_API_TOKEN:
         raise Exception(
@@ -83,33 +220,72 @@ async def run_bright_data_collector(
             "BRIGHT_DATA_COLLECTOR_ID is missing."
         )
 
-    headers = {
-        "Authorization": f"Bearer {BRIGHT_DATA_API_TOKEN}",
-        "Content-Type": "application/json",
-    }
+    # -----------------------------------------------------
+    # Clean environment values again
+    # -----------------------------------------------------
 
-    trigger_endpoint = (
-        f"{TRIGGER_URL}"
-        f"?collector={BRIGHT_DATA_COLLECTOR_ID}"
-        f"&queue_next=1"
+    api_token = clean_env(
+        BRIGHT_DATA_API_TOKEN
     )
 
+    collector_id = clean_env(
+        BRIGHT_DATA_COLLECTOR_ID
+    )
+
+    # -----------------------------------------------------
+    # Headers
+    # -----------------------------------------------------
+
+    headers = {
+        "Authorization":
+            f"Bearer {api_token}",
+
+        "Content-Type":
+            "application/json",
+    }
+
+    # -----------------------------------------------------
+    # HTTP CLIENT
+    # -----------------------------------------------------
+
     async with httpx.AsyncClient(
-        timeout=90.0
+        timeout=90.0,
+        follow_redirects=True,
     ) as client:
 
-        # -------------------------------------------------
-        # TRIGGER
-        # -------------------------------------------------
+        # =================================================
+        # TRIGGER BRIGHT DATA
+        # =================================================
+
+        trigger_params = {
+            "collector": collector_id,
+            "queue_next": "1",
+        }
+
+        trigger_payload = [
+            {
+                "url": url
+            }
+        ]
+
+        print(
+            "Bright Data target URL:",
+            repr(url)
+        )
+
+        print(
+            "Bright Data collector:",
+            repr(collector_id)
+        )
 
         response = await client.post(
-            trigger_endpoint,
+            TRIGGER_URL,
+
+            params=trigger_params,
+
             headers=headers,
-            json=[
-                {
-                    "url": url
-                }
-            ],
+
+            json=trigger_payload,
         )
 
         if response.status_code not in [
@@ -117,63 +293,130 @@ async def run_bright_data_collector(
             201,
             202,
         ]:
+
             raise Exception(
-                f"Bright Data trigger failed: "
+                "Bright Data trigger failed: "
                 f"{response.text}"
             )
 
-        trigger_data = response.json()
+        # -------------------------------------------------
+        # Parse trigger response
+        # -------------------------------------------------
+
+        try:
+
+            trigger_data = (
+                response.json()
+            )
+
+        except Exception:
+
+            raise Exception(
+                "Bright Data returned "
+                "an invalid response: "
+                f"{response.text}"
+            )
+
+        # -------------------------------------------------
+        # Find collection ID
+        # -------------------------------------------------
 
         collection_id = (
-            trigger_data.get("collection_id")
-            or trigger_data.get("id")
-            or trigger_data.get("snapshot_id")
+            trigger_data.get(
+                "collection_id"
+            )
+
+            or trigger_data.get(
+                "id"
+            )
+
+            or trigger_data.get(
+                "snapshot_id"
+            )
         )
 
         if not collection_id:
+
             raise Exception(
-                f"Bright Data did not return a collection ID: "
-                f"{trigger_data}"
+                "Bright Data did not return "
+                f"a collection ID: {trigger_data}"
             )
 
-        # -------------------------------------------------
-        # POLL RESULT
-        # -------------------------------------------------
-
-        result_endpoint = (
-            f"{RESULT_URL}?id={collection_id}"
+        collection_id = clean_env(
+            collection_id
         )
 
-        for _ in range(45):
+        # =================================================
+        # POLL RESULT
+        # =================================================
 
-            result_response = await client.get(
-                result_endpoint,
-                headers=headers,
+        for attempt in range(45):
+
+            result_params = {
+                "id": collection_id
+            }
+
+            result_response = (
+                await client.get(
+                    RESULT_URL,
+
+                    params=result_params,
+
+                    headers=headers,
+                )
             )
+
+            # -------------------------------------------------
+            # RESULT READY
+            # -------------------------------------------------
 
             if result_response.status_code == 200:
 
                 try:
-                    data = result_response.json()
+
+                    data = (
+                        result_response.json()
+                    )
+
                 except Exception:
-                    data = result_response.text
+
+                    data = (
+                        result_response.text
+                    )
 
                 return {
-                    "collection_id": collection_id,
-                    "data": data,
+                    "collection_id":
+                        collection_id,
+
+                    "data":
+                        data,
                 }
+
+            # -------------------------------------------------
+            # STILL PROCESSING
+            # -------------------------------------------------
 
             if result_response.status_code in [
                 202,
                 404,
             ]:
+
                 await asyncio.sleep(2)
+
                 continue
 
+            # -------------------------------------------------
+            # OTHER ERROR
+            # -------------------------------------------------
+
             raise Exception(
-                f"Bright Data result failed: "
+                "Bright Data result failed: "
                 f"{result_response.text}"
             )
+
+        # -------------------------------------------------
+        # TIMEOUT
+        # -------------------------------------------------
 
         raise Exception(
             "Bright Data extraction timed out."
@@ -189,15 +432,24 @@ async def analyze_with_gemini(
 ) -> Dict[str, Any]:
 
     if not gemini:
+
         raise Exception(
             "GEMINI_API_KEY is missing."
         )
+
+    # -----------------------------------------------------
+    # Convert data to JSON
+    # -----------------------------------------------------
 
     data_text = json.dumps(
         data,
         indent=2,
         ensure_ascii=False,
     )
+
+    # -----------------------------------------------------
+    # Gemini prompt
+    # -----------------------------------------------------
 
     prompt = f"""
 You are ScrapeHeal AI, a web extraction reliability
@@ -260,67 +512,109 @@ DATA:
 {data_text[:30000]}
 """
 
+    # -----------------------------------------------------
+    # Gemini call
+    # -----------------------------------------------------
+
     response = await asyncio.to_thread(
         gemini.models.generate_content,
+
         model="gemini-3.6-flash",
+
         contents=prompt,
     )
 
-    text = response.text.strip()
+    text = (
+        response.text
+        or ""
+    ).strip()
+
+    # -----------------------------------------------------
+    # Remove markdown code fences
+    # -----------------------------------------------------
 
     if text.startswith("```"):
-        text = text.replace(
-            "```json",
-            "",
-        ).replace(
-            "```",
-            "",
-        ).strip()
 
-    try:
-        analysis = json.loads(text)
-    except Exception:
-        raise Exception(
-            f"Gemini returned invalid JSON: {text}"
+        text = (
+            text.replace(
+                "```json",
+                "",
+            )
+            .replace(
+                "```",
+                "",
+            )
+            .strip()
         )
 
     # -----------------------------------------------------
-    # NORMALIZE
+    # Parse JSON
+    # -----------------------------------------------------
+
+    try:
+
+        analysis = json.loads(
+            text
+        )
+
+    except Exception:
+
+        raise Exception(
+            "Gemini returned invalid JSON: "
+            f"{text}"
+        )
+
+    # -----------------------------------------------------
+    # Normalize result
     # -----------------------------------------------------
 
     return {
-        "is_valid": bool(
-            analysis.get("is_valid", False)
-        ),
 
-        "confidence": int(
-            analysis.get("confidence", 0)
-        ),
+        "is_valid":
+            bool(
+                analysis.get(
+                    "is_valid",
+                    False,
+                )
+            ),
 
-        "risk_level": analysis.get(
-            "risk_level",
-            "unknown",
-        ),
+        "confidence":
+            int(
+                analysis.get(
+                    "confidence",
+                    0,
+                )
+            ),
 
-        "issues": analysis.get(
-            "issues",
-            [],
-        ),
+        "risk_level":
+            analysis.get(
+                "risk_level",
+                "unknown",
+            ),
 
-        "explanation": analysis.get(
-            "explanation",
-            "",
-        ),
+        "issues":
+            analysis.get(
+                "issues",
+                [],
+            ),
 
-        "repair_instruction": analysis.get(
-            "repair_instruction",
-            "",
-        ),
+        "explanation":
+            analysis.get(
+                "explanation",
+                "",
+            ),
 
-        "recommended_action": analysis.get(
-            "recommended_action",
-            "review",
-        ),
+        "repair_instruction":
+            analysis.get(
+                "repair_instruction",
+                "",
+            ),
+
+        "recommended_action":
+            analysis.get(
+                "recommended_action",
+                "review",
+            ),
     }
 
 
@@ -336,29 +630,75 @@ async def heal_bright_data_collector(
     if not BRIGHT_DATA_API_TOKEN:
         return False
 
-    endpoint = (
-        f"{HEAL_URL}/{collector_id}/heal"
+    # -----------------------------------------------------
+    # Clean values
+    # -----------------------------------------------------
+
+    collector_id = clean_env(
+        collector_id
     )
+
+    instruction = str(
+        instruction or ""
+    ).strip()
+
+    if not collector_id:
+        return False
+
+    # -----------------------------------------------------
+    # Build endpoint
+    # -----------------------------------------------------
+
+    endpoint = (
+        f"{HEAL_URL}/"
+        f"{collector_id}/heal"
+    )
+
+    # -----------------------------------------------------
+    # Headers
+    # -----------------------------------------------------
 
     headers = {
         "Authorization":
-            f"Bearer {BRIGHT_DATA_API_TOKEN}",
+            f"Bearer "
+            f"{clean_env(BRIGHT_DATA_API_TOKEN)}",
+
         "Content-Type":
             "application/json",
     }
 
+    # -----------------------------------------------------
+    # Payload
+    # -----------------------------------------------------
+
     payload = {
-        "instructions": instruction,
-        "auto_deploy": True,
+
+        "instructions":
+            instruction,
+
+        "auto_deploy":
+            True,
     }
 
+    print(
+        "Bright Data heal endpoint:",
+        repr(endpoint)
+    )
+
+    # -----------------------------------------------------
+    # Request
+    # -----------------------------------------------------
+
     async with httpx.AsyncClient(
-        timeout=90.0
+        timeout=90.0,
+        follow_redirects=True,
     ) as client:
 
         response = await client.post(
             endpoint,
+
             headers=headers,
+
             json=payload,
         )
 
@@ -370,33 +710,48 @@ async def heal_bright_data_collector(
 
 
 # =========================================================
-# HEALTH
+# HOME
 # =========================================================
 
 @app.get("/")
 def home():
 
     return {
-        "name": "ScrapeHeal AI",
-        "status": "online",
-        "version": "4.0.0",
+
+        "name":
+            "ScrapeHeal AI",
+
+        "status":
+            "online",
+
+        "version":
+            "4.0.0",
     }
 
+
+# =========================================================
+# HEALTH
+# =========================================================
 
 @app.get("/health")
 def health():
 
     return {
-        "status": "healthy",
 
-        "bright_data": bool(
-            BRIGHT_DATA_API_TOKEN
-            and BRIGHT_DATA_COLLECTOR_ID
-        ),
+        "status":
+            "healthy",
 
-        "gemini": bool(
-            GEMINI_API_KEY
-        ),
+        "bright_data":
+            bool(
+                BRIGHT_DATA_API_TOKEN
+                and
+                BRIGHT_DATA_COLLECTOR_ID
+            ),
+
+        "gemini":
+            bool(
+                GEMINI_API_KEY
+            ),
     }
 
 
@@ -416,39 +771,75 @@ async def self_heal(
     try:
 
         # =================================================
+        # CLEAN TARGET URL
+        # =================================================
+
+        target_url = clean_url(
+            request.url
+        )
+
+        print(
+            "Received URL:",
+            repr(request.url)
+        )
+
+        print(
+            "Cleaned URL:",
+            repr(target_url)
+        )
+
+        # =================================================
         # ATTEMPT 1 - INITIAL EXTRACTION
         # =================================================
 
         attempts += 1
 
         history.append({
-            "step": len(history) + 1,
-            "action": "bright_data_extraction",
-            "status": "running",
+
+            "step":
+                len(history) + 1,
+
+            "action":
+                "bright_data_extraction",
+
+            "status":
+                "running",
         })
 
         first_result = (
             await run_bright_data_collector(
-                request.url
+                target_url
             )
         )
 
-        current_data = first_result["data"]
+        current_data = (
+            first_result["data"]
+        )
 
-        history[-1]["status"] = "completed"
+        history[-1]["status"] = (
+            "completed"
+        )
 
         # =================================================
         # GEMINI DIAGNOSIS
         # =================================================
 
         history.append({
-            "step": len(history) + 1,
-            "action": "gemini_diagnosis",
-            "status": "completed",
+
+            "step":
+                len(history) + 1,
+
+            "action":
+                "gemini_diagnosis",
+
+            "status":
+                "completed",
         })
 
-        analysis = await analyze_with_gemini(
-            current_data
+        analysis = (
+            await analyze_with_gemini(
+                current_data
+            )
         )
 
         # =================================================
@@ -458,21 +849,36 @@ async def self_heal(
         if analysis["is_valid"]:
 
             history.append({
-                "step": len(history) + 1,
-                "action": "verification_completed",
-                "status": "verified",
+
+                "step":
+                    len(history) + 1,
+
+                "action":
+                    "verification_completed",
+
+                "status":
+                    "verified",
             })
 
             return {
-                "status": "success",
 
-                "attempts": attempts,
+                "status":
+                    "success",
 
-                "final_data": current_data,
+                "attempts":
+                    attempts,
 
-                "analysis": analysis,
+                "url":
+                    target_url,
 
-                "history": history,
+                "final_data":
+                    current_data,
+
+                "analysis":
+                    analysis,
+
+                "history":
+                    history,
             }
 
         # =================================================
@@ -480,17 +886,27 @@ async def self_heal(
         # =================================================
 
         history.append({
-            "step": len(history) + 1,
-            "action": "anomaly_detected",
-            "status": "detected",
-            "issues": analysis["issues"],
+
+            "step":
+                len(history) + 1,
+
+            "action":
+                "anomaly_detected",
+
+            "status":
+                "detected",
+
+            "issues":
+                analysis["issues"],
         })
 
         repair_instruction = (
             analysis.get(
                 "repair_instruction"
             )
-            or "Repair the detected extraction issues."
+
+            or
+            "Repair the detected extraction issues."
         )
 
         # =================================================
@@ -498,35 +914,56 @@ async def self_heal(
         # =================================================
 
         history.append({
-            "step": len(history) + 1,
-            "action": "repair_requested",
-            "status": "running",
+
+            "step":
+                len(history) + 1,
+
+            "action":
+                "repair_requested",
+
+            "status":
+                "running",
         })
 
         healed = (
             await heal_bright_data_collector(
+
                 BRIGHT_DATA_COLLECTOR_ID,
+
                 repair_instruction,
             )
         )
 
         if not healed:
 
-            history[-1]["status"] = "failed"
+            history[-1]["status"] = (
+                "failed"
+            )
 
             return {
-                "status": "failed",
 
-                "attempts": attempts,
+                "status":
+                    "failed",
 
-                "final_data": current_data,
+                "attempts":
+                    attempts,
 
-                "analysis": analysis,
+                "url":
+                    target_url,
 
-                "history": history,
+                "final_data":
+                    current_data,
+
+                "analysis":
+                    analysis,
+
+                "history":
+                    history,
             }
 
-        history[-1]["status"] = "completed"
+        history[-1]["status"] = (
+            "completed"
+        )
 
         # =================================================
         # ATTEMPT 2 - AFTER REPAIR
@@ -535,29 +972,45 @@ async def self_heal(
         attempts += 1
 
         history.append({
-            "step": len(history) + 1,
-            "action": "bright_data_re_extraction",
-            "status": "running",
+
+            "step":
+                len(history) + 1,
+
+            "action":
+                "bright_data_re_extraction",
+
+            "status":
+                "running",
         })
 
         second_result = (
             await run_bright_data_collector(
-                request.url
+                target_url
             )
         )
 
-        repaired_data = second_result["data"]
+        repaired_data = (
+            second_result["data"]
+        )
 
-        history[-1]["status"] = "completed"
+        history[-1]["status"] = (
+            "completed"
+        )
 
         # =================================================
-        # VERIFY REPAIRED DATA WITH GEMINI
+        # VERIFY REPAIRED DATA
         # =================================================
 
         history.append({
-            "step": len(history) + 1,
-            "action": "post_repair_verification",
-            "status": "running",
+
+            "step":
+                len(history) + 1,
+
+            "action":
+                "post_repair_verification",
+
+            "status":
+                "running",
         })
 
         final_analysis = (
@@ -572,51 +1025,107 @@ async def self_heal(
 
         if final_analysis["is_valid"]:
 
-            history[-1]["status"] = "verified"
+            history[-1]["status"] = (
+                "verified"
+            )
 
             return {
-                "status": "self_healed",
 
-                "attempts": attempts,
+                "status":
+                    "self_healed",
 
-                "final_data": repaired_data,
+                "attempts":
+                    attempts,
 
-                "analysis": final_analysis,
+                "url":
+                    target_url,
 
-                "history": history,
+                "final_data":
+                    repaired_data,
+
+                "analysis":
+                    final_analysis,
+
+                "history":
+                    history,
             }
 
         # =================================================
-        # REPAIR DID NOT FIX DATA
+        # REPAIR FAILED
         # =================================================
 
-        history[-1]["status"] = "failed"
+        history[-1]["status"] = (
+            "failed"
+        )
 
         return {
-            "status": "failed",
 
-            "attempts": attempts,
+            "status":
+                "failed",
 
-            "final_data": repaired_data,
+            "attempts":
+                attempts,
 
-            "analysis": final_analysis,
+            "url":
+                target_url,
 
-            "history": history,
+            "final_data":
+                repaired_data,
+
+            "analysis":
+                final_analysis,
+
+            "history":
+                history,
         }
+
+    except ValueError as e:
+
+        raise HTTPException(
+
+            status_code=400,
+
+            detail={
+                "error":
+                    str(e),
+
+                "type":
+                    "invalid_request",
+            },
+        )
 
     except Exception as e:
 
+        print(
+            "ScrapeHeal pipeline error:",
+            repr(e)
+        )
+
         history.append({
-            "step": len(history) + 1,
-            "action": "pipeline_error",
-            "status": "failed",
+
+            "step":
+                len(history) + 1,
+
+            "action":
+                "pipeline_error",
+
+            "status":
+                "failed",
         })
 
         raise HTTPException(
+
             status_code=500,
+
             detail={
-                "error": str(e),
-                "attempts": attempts,
-                "history": history,
+
+                "error":
+                    str(e),
+
+                "attempts":
+                    attempts,
+
+                "history":
+                    history,
             },
         )
