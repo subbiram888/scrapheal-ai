@@ -4,7 +4,7 @@ const apiUrl = import.meta.env.VITE_API_URL || "";
 const DEFAULT_URL = "https://books.toscrape.com/";
 
 /* =========================================================
-   URL CLEANING
+   URL CLEANING & VALIDATION
 ========================================================= */
 
 function cleanUrl(value) {
@@ -16,10 +16,6 @@ function cleanUrl(value) {
   return cleaned.trim();
 }
 
-/* =========================================================
-   URL VALIDATION
-========================================================= */
-
 function validateUrl(value) {
   try {
     const parsed = new URL(value);
@@ -28,10 +24,6 @@ function validateUrl(value) {
     return false;
   }
 }
-
-/* =========================================================
-   FORMAT HELPERS
-========================================================= */
 
 function formatText(value) {
   if (!value) return "Unknown";
@@ -82,7 +74,6 @@ export default function App() {
     setLoading(true);
 
     try {
-      // Fixed: changed API_URL to apiUrl
       const backendUrl = apiUrl.replace(/\/+$/, "");
       const endpoint = `${backendUrl}/self-heal`;
 
@@ -144,6 +135,9 @@ export default function App() {
   const issues = Array.isArray(analysis.issues) ? analysis.issues : [];
   const isValid = analysis.is_valid === true;
   const isSelfHealed = result?.status === "self_healed";
+
+  // Extracted raw JSON dataset returned by Bright Data scraper
+  const extractedData = result?.data || result?.extracted_data || result?.items || result;
 
   const statusLabel = isSelfHealed
     ? "SELF-HEALED"
@@ -239,6 +233,24 @@ export default function App() {
         .analysis-box p { margin: 0; color: #475467; line-height: 1.6; }
         .issues { margin: 0; padding-left: 20px; color: #475467; line-height: 1.7; }
         .no-issues { color: #087443; font-weight: 700; }
+        .json-container {
+          background: #0f172a;
+          border: 1px solid #1e293b;
+          border-radius: 16px;
+          padding: 24px;
+          max-height: 480px;
+          overflow-y: auto;
+          color: #e2e8f0;
+          font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+          font-size: 14px;
+          line-height: 1.6;
+          text-align: left;
+        }
+        .json-container pre {
+          margin: 0;
+          white-space: pre-wrap;
+          word-break: break-all;
+        }
         .history-row { display: grid; grid-template-columns: 45px 1fr auto; align-items: center; gap: 15px; padding: 17px 0; border-bottom: 1px solid #eaecf0; }
         .history-row:last-child { border-bottom: none; }
         .history-number { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: #eeeaff; color: #573de0; font-weight: 800; }
@@ -396,6 +408,17 @@ export default function App() {
                 <div className="stat-value">{action}</div>
               </div>
             </div>
+
+            {/* EXTRACTED DATA CARD (DARK JSON VIEWER) */}
+            <section className="card">
+              <div className="label">📦 EXTRACTED DATA</div>
+              <p className="description">The final data returned by the extraction pipeline.</p>
+              <div className="json-container">
+                <pre>
+                  <code>{JSON.stringify(extractedData, null, 2)}</code>
+                </pre>
+              </div>
+            </section>
 
             <section className="card">
               <div className="label">AI VALIDATION</div>
