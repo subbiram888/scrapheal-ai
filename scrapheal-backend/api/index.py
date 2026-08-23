@@ -57,14 +57,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "https://scrapheal-ai.vercel.app/", # Replace with your actual frontend URL
-    ],
+    allow_origins=["*"],  # Allows all origins (or list your exact frontend Vercel URL)
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # Allows POST, GET, OPTIONS, etc.
+    allow_headers=["*"],  # Allows Content-Type and custom headers
 )
 
 
