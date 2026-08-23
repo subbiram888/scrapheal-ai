@@ -6,95 +6,277 @@ const API_URL =
 
 const DEFAULT_URL = "https://books.toscrape.com/";
 
-function formatAction(action = "") {
-  return action
-    .replaceAll("_", " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
+/* =========================================================
+   URL CLEANING
+========================================================= */
 
-function getStatus(result) {
-  if (!result) return null;
-
-  const valid = result.analysis?.is_valid === true;
-
-  if (
-    valid &&
-    (result.status === "success" ||
-      result.status === "self_healed")
-  ) {
-    return {
-      label: result.status === "self_healed"
-        ? "SELF-HEALED"
-        : "VERIFIED",
-      className: "success",
-    };
+function cleanUrl(value) {
+  if (!value) {
+    return "";
   }
 
-  return {
-    label: "REVIEW",
-    className: "review",
-  };
+  let cleaned = String(value);
+
+  // Remove ALL ASCII control characters including \n, \r and \t
+  cleaned = cleaned.replace(/[\u0000-\u001F\u007F]/g, "");
+
+  // Remove accidental quotes
+  cleaned = cleaned.replace(/^["']+|["']+$/g, "");
+
+  // Remove spaces
+  cleaned = cleaned.replace(/\s/g, "");
+
+  return cleaned.trim();
 }
+
+/* =========================================================
+   URL VALIDATION
+========================================================= */
+
+function validateUrl(value) {
+  try {
+    const parsed = new URL(value);
+
+    if (
+      parsed.protocol !== "http:" &&
+      parsed.protocol !== "https:"
+    ) {
+      return false;
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/* =========================================================
+   FORMAT HELPERS
+========================================================= */
+
+function formatText(value) {
+  if (!value) {
+    return "Unknown";
+  }
+
+  return String(value)
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) =>
+      letter.toUpperCase()
+    );
+}
+
+/* =========================================================
+   MAIN APP
+========================================================= */
 
 export default function App() {
   const [url, setUrl] = useState(DEFAULT_URL);
+
   const [loading, setLoading] = useState(false);
+
   const [result, setResult] = useState(null);
+
   const [error, setError] = useState("");
 
-  const analyzeWebsite = async () => {
-    const targetUrl = url.trim();
+  /* =======================================================
+     HANDLE URL INPUT
+  ======================================================= */
+
+  const handleUrlChange = (event) => {
+    const value = event.target.value;
+
+    // Clean immediately while typing
+    const cleaned = value
+      .replace(/[\u0000-\u001F\u007F]/g, "")
+      .replace(/[\r\n\t]/g, "");
+
+    setUrl(cleaned);
+
+    // Clear previous error when user changes URL
+    if (error) {
+      setError("");
+    }
+  };
+
+  /* =======================================================
+     ANALYZE
+  ======================================================= */
+
+  const handleAnalyze = async () => {
+    setError("");
+    setResult(null);
+
+    /*
+      IMPORTANT:
+      Clean the URL one final time immediately
+      before sending it to FastAPI.
+    */
+
+    const targetUrl = cleanUrl(url);
+
+    console.log("Original URL:", JSON.stringify(url));
+
+    console.log(
+      "Clean URL:",
+      JSON.stringify(targetUrl)
+    );
 
     if (!targetUrl) {
       setError("Please enter a website URL.");
       return;
     }
 
+    if (!validateUrl(targetUrl)) {
+      setError(
+        "Please enter a valid URL beginning with http:// or https://"
+      );
+      return;
+    }
+
     setLoading(true);
-    setError("");
-    setResult(null);
 
     try {
-      const response = await fetch(`${API_URL}/self-heal`, {
+      /*
+        Remove any accidental slash from API_URL
+        before adding /self-heal.
+      */
+
+      const backendUrl =
+        API_URL.replace(/\/+$/, "");
+
+      const endpoint =
+        `${backendUrl}/self-heal`;
+
+      console.log(
+        "ScrapeHeal API endpoint:",
+        endpoint
+      );
+
+      /*
+        Send ONLY the cleaned URL.
+      */
+
+      const response = await fetch(endpoint, {
         method: "POST",
+
         headers: {
           "Content-Type": "application/json",
+          Accept: "application/json",
         },
+
         body: JSON.stringify({
           url: targetUrl,
         }),
       });
 
-      const data = await response.json();
+      /*
+        Read response safely.
+      */
 
-      if (!response.ok) {
-        const detail =
-          typeof data.detail === "object"
-            ? data.detail?.error
-            : data.detail;
+      const contentType =
+        response.headers.get("content-type") || "";
+
+      let data;
+
+      if (
+        contentType.includes("application/json")
+      ) {
+        data = await response.json();
+      } else {
+        const text = await response.text();
 
         throw new Error(
-          detail || data.error || `Request failed with ${response.status}`
+          text ||
+          `Backend returned HTTP ${response.status}`
         );
       }
 
+      /*
+        Backend error
+      */
+
+      if (!response.ok) {
+        let message =
+          `Request failed with status ${response.status}.`;
+
+        if (
+          typeof data?.detail === "string"
+        ) {
+          message = data.detail;
+        }
+
+        else if (
+          data?.detail &&
+          typeof data.detail === "object"
+        ) {
+          message =
+            data.detail.error ||
+            data.detail.message ||
+            JSON.stringify(data.detail);
+        }
+
+        else if (data?.error) {
+          message = data.error;
+        }
+
+        throw new Error(message);
+      }
+
+      /*
+        SUCCESS
+      */
+
+      console.log(
+        "ScrapeHeal response:",
+        data
+      );
+
       setResult(data);
+
     } catch (err) {
-      console.error(err);
+
+      console.error(
+        "ScrapeHeal error:",
+        err
+      );
 
       setError(
-        err.message ||
-          "Unable to connect to the ScrapeHeal backend."
+        err?.message ||
+        "Failed to connect to ScrapeHeal backend."
       );
+
     } finally {
       setLoading(false);
     }
   };
 
-  const status = getStatus(result);
+  /* =======================================================
+     ENTER KEY
+  ======================================================= */
 
-  const analysis = result?.analysis || {};
-  const history = result?.history || [];
+  const handleKeyDown = (event) => {
+    if (
+      event.key === "Enter" &&
+      !loading
+    ) {
+      event.preventDefault();
+
+      handleAnalyze();
+    }
+  };
+
+  /* =======================================================
+     RESULT INFORMATION
+  ======================================================= */
+
+  const analysis =
+    result?.analysis || {};
+
+  const history =
+    Array.isArray(result?.history)
+      ? result.history
+      : [];
 
   const confidence =
     typeof analysis.confidence === "number"
@@ -102,34 +284,73 @@ export default function App() {
       : 0;
 
   const risk =
-    analysis.risk_level
-      ? analysis.risk_level.charAt(0).toUpperCase() +
-        analysis.risk_level.slice(1)
-      : "Unknown";
+    formatText(
+      analysis.risk_level
+    );
 
   const action =
-    analysis.recommended_action || "review";
+    formatText(
+      analysis.recommended_action ||
+      result?.action ||
+      "Completed"
+    );
+
+  const issues =
+    Array.isArray(analysis.issues)
+      ? analysis.issues
+      : [];
+
+  const isValid =
+    analysis.is_valid === true;
+
+  const isSelfHealed =
+    result?.status ===
+    "self_healed";
+
+  const statusLabel =
+    isSelfHealed
+      ? "SELF-HEALED"
+      : isValid
+        ? "VERIFIED"
+        : result
+          ? "REVIEW"
+          : "";
+
+  /* =======================================================
+     UI
+  ======================================================= */
 
   return (
     <div className="app">
+
       <style>{`
+
         * {
           box-sizing: border-box;
+        }
+
+        html {
+          scroll-behavior: smooth;
         }
 
         body {
           margin: 0;
           font-family:
             Inter,
-            ui-sans-serif,
             system-ui,
             -apple-system,
             BlinkMacSystemFont,
             "Segoe UI",
             sans-serif;
-          background:
-            linear-gradient(135deg, #f7f8ff 0%, #eef3ff 100%);
+
           color: #101828;
+
+          background:
+            linear-gradient(
+              135deg,
+              #f8f9ff 0%,
+              #eef3ff 100%
+            );
         }
 
         button,
@@ -141,416 +362,706 @@ export default function App() {
           min-height: 100vh;
         }
 
-        .topbar {
-          height: 76px;
+        /* ================= HEADER ================= */
+
+        .header {
+          height: 78px;
+
           display: flex;
+
+          justify-content:
+            space-between;
+
           align-items: center;
-          justify-content: space-between;
-          padding: 0 7%;
-          background: rgba(255,255,255,.92);
-          border-bottom: 1px solid #e4e7ec;
+
+          padding:
+            0 7%;
+
+          background:
+            rgba(255,255,255,.96);
+
+          border-bottom:
+            1px solid #e4e7ec;
         }
 
         .brand {
           display: flex;
+
           align-items: center;
+
           gap: 12px;
         }
 
         .brand-icon {
           width: 42px;
           height: 42px;
-          border-radius: 13px;
+
           display: grid;
+
           place-items: center;
-          background: linear-gradient(135deg,#6046e8,#3f2dcc);
+
+          border-radius: 13px;
+
+          background:
+            linear-gradient(
+              135deg,
+              #6747ee,
+              #5034d5
+            );
+
           color: white;
+
           font-size: 21px;
         }
 
-        .brand-title {
+        .brand-name {
           font-size: 21px;
+
           font-weight: 800;
         }
 
         .brand-subtitle {
-          font-size: 13px;
           color: #667085;
+
+          font-size: 13px;
+
           margin-top: 2px;
         }
 
         .online {
           display: flex;
+
           align-items: center;
+
           gap: 8px;
+
           color: #087443;
+
           font-size: 13px;
+
           font-weight: 700;
-          background: #ecfdf3;
-          padding: 9px 14px;
-          border-radius: 999px;
         }
 
         .online-dot {
-          width: 8px;
-          height: 8px;
+          width: 9px;
+          height: 9px;
+
           border-radius: 50%;
+
           background: #12b76a;
         }
 
+        /* ================= HERO ================= */
+
         .hero {
-          max-width: 1180px;
-          margin: 0 auto;
-          padding: 70px 28px 55px;
+          max-width: 1200px;
+
+          margin: auto;
+
+          min-height: 370px;
+
+          padding:
+            70px 35px;
+
           display: grid;
-          grid-template-columns: 1fr 380px;
-          gap: 50px;
+
+          grid-template-columns:
+            1fr 400px;
+
           align-items: center;
+
+          gap: 40px;
         }
 
         .eyebrow {
           color: #6246e8;
+
           font-size: 12px;
+
           font-weight: 800;
+
           letter-spacing: 3px;
+
           margin-bottom: 15px;
         }
 
         .hero h1 {
-          font-size: clamp(40px,5vw,62px);
-          line-height: 1.02;
           margin: 0;
-          max-width: 650px;
+
+          font-size:
+            clamp(42px, 5vw, 64px);
+
+          line-height: 1.02;
+
           letter-spacing: -2px;
         }
 
-        .hero p {
+        .hero-description {
+          max-width: 700px;
+
           color: #667085;
-          font-size: 18px;
-          line-height: 1.65;
-          max-width: 680px;
-          margin: 24px 0;
+
+          font-size: 19px;
+
+          line-height: 1.6;
+
+          margin:
+            25px 0;
         }
 
-        .tech {
+        .technologies {
           display: flex;
+
+          gap: 10px;
+
           flex-wrap: wrap;
-          gap: 9px;
         }
 
-        .tech span {
+        .technology {
+          padding:
+            9px 15px;
+
+          border:
+            1px solid #d9e1f2;
+
           background: white;
-          border: 1px solid #d9def0;
-          padding: 8px 13px;
+
           border-radius: 999px;
+
           font-size: 13px;
+
           font-weight: 700;
+
           color: #344054;
         }
 
-        .hero-visual {
+        /* ================= HERO VISUAL ================= */
+
+        .visual {
+          height: 320px;
+
           position: relative;
-          height: 310px;
+
           display: grid;
+
           place-items: center;
         }
 
-        .core {
-          width: 220px;
-          height: 220px;
+        .circle {
+          width: 230px;
+          height: 230px;
+
           border-radius: 50%;
-          background: linear-gradient(145deg,#6754f3,#4d36dc);
+
           display: grid;
+
           place-items: center;
-          box-shadow: 0 30px 70px rgba(83,65,225,.25);
+
+          background:
+            linear-gradient(
+              135deg,
+              #6950ed,
+              #533ddc
+            );
+
+          box-shadow:
+            0 35px 80px
+            rgba(88,68,225,.25);
         }
 
-        .core-inner {
-          width: 92px;
-          height: 92px;
-          background: white;
-          border-radius: 28px;
+        .shield {
+          width: 90px;
+          height: 90px;
+
+          border-radius: 22px;
+
           display: grid;
+
           place-items: center;
-          font-size: 38px;
-          box-shadow: 0 15px 30px rgba(0,0,0,.12);
+
+          background: white;
+
+          font-size: 36px;
+
+          box-shadow:
+            0 15px 35px
+            rgba(16,24,40,.15);
         }
 
         .floating {
           position: absolute;
+
+          padding:
+            13px 18px;
+
+          border-radius: 15px;
+
           background: white;
-          border: 1px solid #e4e7ec;
-          padding: 13px 17px;
-          border-radius: 14px;
-          font-weight: 700;
-          box-shadow: 0 15px 35px rgba(16,24,40,.09);
+
+          border:
+            1px solid #e4e7ec;
+
+          box-shadow:
+            0 15px 35px
+            rgba(16,24,40,.10);
+
+          font-weight: 750;
         }
 
-        .float-one {
-          top: 25px;
-          left: 5px;
+        .detect {
+          top: 20px;
+          left: 0;
         }
 
-        .float-two {
+        .diagnose {
+          top: 100px;
           right: 0;
-          top: 90px;
         }
 
-        .float-three {
-          bottom: 25px;
+        .repair {
+          bottom: 20px;
           left: 30px;
         }
 
+        /* ================= MAIN ================= */
+
         .container {
-          max-width: 1180px;
-          margin: 0 auto;
-          padding: 0 28px 70px;
+          max-width: 1200px;
+
+          margin: auto;
+
+          padding:
+            0 35px 70px;
         }
 
         .card {
           background: white;
-          border: 1px solid #e4e7ec;
+
+          border:
+            1px solid #e1e7f0;
+
           border-radius: 25px;
-          padding: 38px;
-          box-shadow: 0 15px 45px rgba(16,24,40,.06);
+
+          padding: 40px;
+
+          box-shadow:
+            0 18px 50px
+            rgba(16,24,40,.06);
+
           margin-bottom: 25px;
         }
 
-        .section-label {
+        .label {
           color: #6246e8;
+
           font-size: 12px;
+
           font-weight: 800;
+
           letter-spacing: 3px;
-          margin-bottom: 12px;
+
+          margin-bottom: 14px;
         }
 
         .card h2 {
-          margin: 0 0 10px;
-          font-size: 31px;
+          margin:
+            0 0 12px;
+
+          font-size: 32px;
+
           letter-spacing: -.8px;
         }
 
-        .muted {
+        .description {
           color: #667085;
-          margin: 0 0 25px;
+
+          font-size: 17px;
+
+          margin-bottom: 27px;
         }
 
+        /* ================= URL ================= */
+
         .url-row {
+          width: 100%;
+
+          min-height: 76px;
+
           display: flex;
+
           align-items: center;
+
           gap: 12px;
+
           padding: 7px;
-          background: #f8faff;
-          border: 1px solid #d9e1f2;
-          border-radius: 17px;
+
+          border:
+            1px solid #d5def0;
+
+          border-radius: 18px;
+
+          background:
+            #f9fbff;
         }
 
         .globe {
-          font-size: 24px;
-          margin-left: 12px;
+          font-size: 27px;
+
+          margin-left: 15px;
         }
 
         .url-input {
           flex: 1;
+
           min-width: 0;
+
           border: none;
+
           outline: none;
+
           background: transparent;
-          padding: 15px 5px;
+
+          padding:
+            15px 5px;
+
+          font-size: 17px;
+
           color: #101828;
-          font-size: 16px;
         }
 
-        .analyze-btn {
+        .analyze {
+          min-width: 155px;
+
+          height: 60px;
+
           border: none;
-          background: linear-gradient(135deg,#6747ee,#5134d7);
+
+          border-radius: 14px;
+
           color: white;
-          padding: 15px 27px;
-          border-radius: 13px;
+
+          background:
+            linear-gradient(
+              135deg,
+              #6847ee,
+              #5435d8
+            );
+
           font-weight: 800;
+
+          font-size: 16px;
+
           cursor: pointer;
-          min-width: 125px;
-          box-shadow: 0 10px 25px rgba(83,57,220,.22);
+
+          box-shadow:
+            0 10px 25px
+            rgba(84,53,216,.25);
         }
 
-        .analyze-btn:disabled {
+        .analyze:hover {
+          transform:
+            translateY(-1px);
+        }
+
+        .analyze:disabled {
           opacity: .65;
+
           cursor: not-allowed;
         }
 
+        /* ================= ERROR ================= */
+
         .error {
-          margin-top: 18px;
-          padding: 14px 16px;
-          border-radius: 12px;
-          background: #fff1f3;
-          border: 1px solid #fecdd3;
-          color: #b42318;
-          font-size: 14px;
+          margin-top: 20px;
+
+          padding:
+            17px 20px;
+
+          border:
+            1px solid #fecaca;
+
+          border-radius: 15px;
+
+          background:
+            #fff5f5;
+
+          color: #c5221f;
+
+          font-size: 15px;
+
+          line-height: 1.5;
         }
+
+        /* ================= LOADING ================= */
 
         .working {
           text-align: center;
-          padding: 45px 20px;
+
+          padding:
+            45px 30px;
         }
 
         .spinner {
           width: 48px;
           height: 48px;
-          margin: 0 auto 18px;
+
+          margin:
+            0 auto 18px;
+
+          border:
+            4px solid #e4e7ec;
+
+          border-top-color:
+            #6246e8;
+
           border-radius: 50%;
-          border: 4px solid #e4e0ff;
-          border-top-color: #6046e8;
-          animation: spin .8s linear infinite;
+
+          animation:
+            spin .8s linear infinite;
         }
 
         @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-
-        .working h2 {
-          margin-bottom: 8px;
-        }
-
-        .working p {
-          color: #667085;
+          to {
+            transform:
+              rotate(360deg);
+          }
         }
 
         .pipeline {
           display: grid;
-          grid-template-columns: repeat(4,1fr);
+
+          grid-template-columns:
+            repeat(4,1fr);
+
           gap: 15px;
+
           margin-top: 30px;
         }
 
         .pipeline-step {
-          padding: 22px;
-          border: 1px solid #e4e7ec;
+          padding: 20px;
+
+          border:
+            1px solid #eaecf0;
+
           border-radius: 16px;
+
           background: #fafbff;
         }
 
-        .number {
-          width: 35px;
-          height: 35px;
+        .pipeline-number {
+          width: 38px;
+          height: 38px;
+
+          margin:
+            0 auto 10px;
+
           display: grid;
+
           place-items: center;
-          background: #eeeaff;
-          color: #573de0;
-          border-radius: 10px;
+
+          border-radius: 50%;
+
+          background: #6246e8;
+
+          color: white;
+
           font-weight: 800;
-          margin-bottom: 12px;
         }
 
         .pipeline-step strong {
           display: block;
-          margin-bottom: 5px;
+
+          font-size: 14px;
         }
 
-        .pipeline-step small {
+        .pipeline-step span {
+          display: block;
+
+          margin-top: 5px;
+
           color: #667085;
+
+          font-size: 13px;
         }
+
+        /* ================= RESULT ================= */
 
         .result-header {
           display: flex;
-          justify-content: space-between;
+
+          justify-content:
+            space-between;
+
           gap: 20px;
-          align-items: center;
+        }
+
+        .result-title {
+          margin: 0 0 7px;
+
+          font-size: 31px;
+
+          font-weight: 800;
         }
 
         .result-url {
           color: #667085;
+
           word-break: break-all;
         }
 
-        .badge {
-          padding: 11px 18px;
+        .status {
+          height: fit-content;
+
+          padding:
+            12px 18px;
+
           border-radius: 999px;
-          font-weight: 800;
-          font-size: 13px;
-          white-space: nowrap;
+
+          font-size: 12px;
+
+          font-weight: 900;
         }
 
-        .badge.success {
+        .status-success {
           background: #ecfdf3;
-          color: #067647;
+
+          color: #087443;
         }
 
-        .badge.review {
+        .status-review {
           background: #fff1f3;
+
           color: #b42318;
         }
 
+        /* ================= STATS ================= */
+
         .stats {
           display: grid;
-          grid-template-columns: repeat(4,1fr);
-          gap: 16px;
-          margin-top: 22px;
+
+          grid-template-columns:
+            repeat(4,1fr);
+
+          gap: 18px;
+
+          margin-bottom: 25px;
         }
 
         .stat {
-          border: 1px solid #e4e7ec;
-          border-radius: 18px;
-          padding: 22px;
+          padding: 24px;
+
           background: white;
+
+          border:
+            1px solid #e4e7ec;
+
+          border-radius: 20px;
+
+          box-shadow:
+            0 12px 35px
+            rgba(16,24,40,.05);
+        }
+
+        .stat-icon {
+          width: 42px;
+          height: 42px;
+
+          display: grid;
+
+          place-items: center;
+
+          border-radius: 12px;
+
+          background: #eeeaff;
+
+          margin-bottom: 13px;
         }
 
         .stat-label {
           color: #667085;
+
           font-size: 13px;
-          margin-bottom: 8px;
         }
 
         .stat-value {
+          margin-top: 5px;
+
           font-size: 24px;
-          font-weight: 800;
+
+          font-weight: 850;
         }
 
+        /* ================= ANALYSIS ================= */
+
         .analysis {
-          margin-top: 25px;
           display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 18px;
+
+          grid-template-columns:
+            1fr 1fr;
+
+          gap: 20px;
         }
 
         .analysis-box {
-          padding: 22px;
-          border-radius: 17px;
-          background: #f8f9fd;
-          border: 1px solid #e4e7ec;
+          padding: 25px;
+
+          border:
+            1px solid #eaecf0;
+
+          border-radius: 18px;
+
+          background: #fcfcfd;
         }
 
         .analysis-box h3 {
-          margin: 0 0 10px;
-          font-size: 16px;
+          margin:
+            0 0 12px;
+
+          font-size: 18px;
         }
 
         .analysis-box p {
           margin: 0;
-          color: #667085;
+
+          color: #475467;
+
           line-height: 1.6;
         }
 
         .issues {
           margin: 0;
+
           padding-left: 20px;
-          color: #667085;
+
+          color: #475467;
+
+          line-height: 1.7;
         }
 
-        .issues li {
-          margin-bottom: 7px;
+        .no-issues {
+          color: #087443;
+
+          font-weight: 700;
         }
 
-        .history {
-          margin-top: 25px;
-        }
+        /* ================= HISTORY ================= */
 
         .history-row {
           display: grid;
-          grid-template-columns: 45px 1fr auto;
-          gap: 15px;
+
+          grid-template-columns:
+            45px 1fr auto;
+
           align-items: center;
-          padding: 17px 0;
-          border-bottom: 1px solid #eaecf0;
+
+          gap: 15px;
+
+          padding:
+            17px 0;
+
+          border-bottom:
+            1px solid #eaecf0;
         }
 
         .history-row:last-child {
@@ -560,11 +1071,17 @@ export default function App() {
         .history-number {
           width: 34px;
           height: 34px;
-          border-radius: 10px;
+
           display: grid;
+
           place-items: center;
+
+          border-radius: 10px;
+
           background: #eeeaff;
+
           color: #573de0;
+
           font-weight: 800;
         }
 
@@ -573,74 +1090,80 @@ export default function App() {
         }
 
         .history-status {
+          color: #079455;
+
           font-size: 12px;
+
           font-weight: 800;
+
           text-transform: uppercase;
         }
 
-        .completed {
-          color: #079455;
-        }
-
-        .failed {
-          color: #d92d20;
-        }
-
-        .detected {
-          color: #b54708;
-        }
-
-        .data-box {
-          margin-top: 25px;
-        }
+        /* ================= DATA ================= */
 
         .data-preview {
-          max-height: 350px;
+          max-height: 400px;
+
           overflow: auto;
-          background: #101828;
-          color: #d0d5dd;
+
           padding: 20px;
+
           border-radius: 15px;
+
+          background: #101828;
+
+          color: #d0d5dd;
+
           font-size: 13px;
-          line-height: 1.55;
+
+          line-height: 1.6;
+
           white-space: pre-wrap;
+
           word-break: break-word;
         }
 
+        /* ================= FOOTER ================= */
+
+        .footer {
+          text-align: center;
+
+          padding:
+            10px 20px 35px;
+
+          color: #98a2b3;
+
+          font-size: 13px;
+        }
+
+        /* ================= MOBILE ================= */
+
         @media (max-width: 850px) {
+
           .hero {
             grid-template-columns: 1fr;
           }
 
-          .hero-visual {
+          .visual {
             display: none;
           }
 
           .pipeline,
           .stats {
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns:
+              1fr 1fr;
           }
 
           .analysis {
             grid-template-columns: 1fr;
           }
-
-          .url-row {
-            flex-wrap: wrap;
-          }
-
-          .url-input {
-            flex-basis: 70%;
-          }
-
-          .analyze-btn {
-            width: 100%;
-          }
         }
 
-        @media (max-width: 560px) {
-          .topbar {
-            padding: 0 20px;
+        @media (max-width: 600px) {
+
+          .header {
+            padding:
+              0 20px;
           }
 
           .online {
@@ -648,45 +1171,86 @@ export default function App() {
           }
 
           .hero {
-            padding-top: 45px;
+            padding:
+              50px 20px;
+          }
+
+          .container {
+            padding:
+              0 15px 50px;
           }
 
           .card {
-            padding: 24px;
+            padding: 25px;
+          }
+
+          .url-row {
+            flex-wrap: wrap;
+
+            padding: 10px;
+          }
+
+          .url-input {
+            width: 70%;
+          }
+
+          .analyze {
+            width: 100%;
           }
 
           .pipeline,
           .stats {
             grid-template-columns: 1fr;
           }
+
+          .result-header {
+            flex-direction: column;
+          }
         }
+
       `}</style>
 
-      {/* HEADER */}
-      <header className="topbar">
+      {/* ===================================================
+          HEADER
+      =================================================== */}
+
+      <header className="header">
+
         <div className="brand">
-          <div className="brand-icon">🛡️</div>
+
+          <div className="brand-icon">
+            🛡️
+          </div>
 
           <div>
-            <div className="brand-title">
+
+            <div className="brand-name">
               ScrapeHeal AI
             </div>
 
             <div className="brand-subtitle">
               Self-healing web extraction
             </div>
+
           </div>
+
         </div>
 
         <div className="online">
           <span className="online-dot" />
           SYSTEM ONLINE
         </div>
+
       </header>
 
-      {/* HERO */}
+      {/* ===================================================
+          HERO
+      =================================================== */}
+
       <section className="hero">
+
         <div>
+
           <div className="eyebrow">
             AUTONOMOUS WEB DATA RELIABILITY
           </div>
@@ -697,175 +1261,294 @@ export default function App() {
             that heals itself.
           </h1>
 
-          <p>
-            Detect extraction anomalies, diagnose them with AI,
-            recover the extraction workflow, and verify the
-            recovered data.
+          <p className="hero-description">
+            Detect extraction anomalies, diagnose them
+            with AI, recover the extraction workflow,
+            and verify the recovered data.
           </p>
 
-          <div className="tech">
-            <span>Bright Data</span>
-            <span>Gemini AI</span>
-            <span>FastAPI</span>
-            <span>React</span>
+          <div className="technologies">
+
+            <span className="technology">
+              Bright Data
+            </span>
+
+            <span className="technology">
+              Gemini AI
+            </span>
+
+            <span className="technology">
+              FastAPI
+            </span>
+
+            <span className="technology">
+              React
+            </span>
+
           </div>
+
         </div>
 
-        <div className="hero-visual">
-          <div className="floating float-one">
+        <div className="visual">
+
+          <div className="floating detect">
             🔎 Detect
           </div>
 
-          <div className="floating float-two">
+          <div className="floating diagnose">
             🤖 Diagnose
           </div>
 
-          <div className="floating float-three">
+          <div className="floating repair">
             🔧 Repair
           </div>
 
-          <div className="core">
-            <div className="core-inner">
-              ✓
+          <div className="circle">
+
+            <div className="shield">
+              🛡️
             </div>
+
           </div>
+
         </div>
+
       </section>
+
+      {/* ===================================================
+          MAIN
+      =================================================== */}
 
       <main className="container">
 
-        {/* EXTRACTION CONTROL */}
+        {/* EXTRACTION */}
+
         <section className="card">
-          <div className="section-label">
+
+          <div className="label">
             EXTRACTION CONTROL
           </div>
 
-          <h2>Analyze a public website</h2>
+          <h2>
+            Analyze a public website
+          </h2>
 
-          <p className="muted">
-            Enter a public website and let ScrapeHeal extract
-            and validate its data.
+          <p className="description">
+            Enter a public website and let ScrapeHeal
+            extract and validate its data.
           </p>
 
           <div className="url-row">
-            <span className="globe">🌐</span>
+
+            <span className="globe">
+              🌐
+            </span>
 
             <input
               className="url-input"
+              type="text"
               value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !loading) {
-                  analyzeWebsite();
-                }
-              }}
+              onChange={handleUrlChange}
+              onKeyDown={handleKeyDown}
               placeholder="https://example.com"
               disabled={loading}
+              spellCheck={false}
+              autoComplete="off"
             />
 
             <button
-              className="analyze-btn"
-              onClick={analyzeWebsite}
+              className="analyze"
+              onClick={handleAnalyze}
               disabled={loading}
             >
-              {loading ? "Analyzing..." : "🚀 Analyze"}
+              {loading
+                ? "Analyzing..."
+                : "🚀 Analyze"}
             </button>
+
           </div>
 
           {error && (
+
             <div className="error">
               ⚠️ {error}
             </div>
+
           )}
+
         </section>
 
-        {/* LOADING */}
+        {/* =================================================
+            LOADING
+        ================================================= */}
+
         {loading && (
+
           <section className="card working">
+
             <div className="spinner" />
 
-            <h2>ScrapeHeal is working...</h2>
+            <h2>
+              ScrapeHeal is working...
+            </h2>
 
-            <p>
-              Running extraction, AI diagnosis, repair and
-              verification.
+            <p className="description">
+              Running extraction, AI diagnosis,
+              repair and verification.
             </p>
 
             <div className="pipeline">
+
               <div className="pipeline-step">
-                <div className="number">1</div>
-                <strong>Bright Data</strong>
-                <small>Extract</small>
+
+                <div className="pipeline-number">
+                  1
+                </div>
+
+                <strong>
+                  Bright Data
+                </strong>
+
+                <span>
+                  Extract
+                </span>
+
               </div>
 
               <div className="pipeline-step">
-                <div className="number">2</div>
-                <strong>Gemini AI</strong>
-                <small>Diagnose</small>
+
+                <div className="pipeline-number">
+                  2
+                </div>
+
+                <strong>
+                  Gemini AI
+                </strong>
+
+                <span>
+                  Diagnose
+                </span>
+
               </div>
 
               <div className="pipeline-step">
-                <div className="number">3</div>
-                <strong>Repair</strong>
-                <small>Recover</small>
+
+                <div className="pipeline-number">
+                  3
+                </div>
+
+                <strong>
+                  Repair
+                </strong>
+
+                <span>
+                  Recover
+                </span>
+
               </div>
 
               <div className="pipeline-step">
-                <div className="number">4</div>
-                <strong>Verify</strong>
-                <small>Trust</small>
+
+                <div className="pipeline-number">
+                  4
+                </div>
+
+                <strong>
+                  Verify
+                </strong>
+
+                <span>
+                  Trust
+                </span>
+
               </div>
+
             </div>
+
           </section>
+
         )}
 
-        {/* RESULT */}
+        {/* =================================================
+            RESULT
+        ================================================= */}
+
         {result && !loading && (
+
           <>
+
             <section className="card">
-              <div className="section-label">
-                SCRAPING RESULT
-              </div>
 
               <div className="result-header">
+
                 <div>
-                  <h2>
-                    {status?.label === "VERIFIED"
-                      ? "Extraction verified"
-                      : status?.label === "SELF-HEALED"
+
+                  <div className="label">
+                    SCRAPING RESULT
+                  </div>
+
+                  <h2 className="result-title">
+
+                    {isSelfHealed
                       ? "Extraction self-healed"
-                      : "Extraction requires review"}
+                      : isValid
+                        ? "Extraction verified"
+                        : "Extraction requires review"}
+
                   </h2>
 
                   <div className="result-url">
-                    {result.url || url}
+                    {cleanUrl(
+                      result.url || url
+                    )}
                   </div>
+
                 </div>
 
                 <div
-                  className={`badge ${status?.className}`}
+                  className={
+                    isValid
+                      ? "status status-success"
+                      : "status status-review"
+                  }
                 >
-                  {status?.className === "success"
+                  {isValid
                     ? "✓ "
-                    : "✕ "}
-                  {status?.label}
+                    : "⚠ "}
+
+                  {statusLabel}
                 </div>
+
               </div>
+
             </section>
 
             {/* STATS */}
-            <section className="stats">
+
+            <div className="stats">
+
               <div className="stat">
+
+                <div className="stat-icon">
+                  🔄
+                </div>
+
                 <div className="stat-label">
-                  Pipeline Events
+                  Pipeline Steps
                 </div>
 
                 <div className="stat-value">
                   {history.length}
                 </div>
+
               </div>
 
               <div className="stat">
+
+                <div className="stat-icon">
+                  🎯
+                </div>
+
                 <div className="stat-label">
                   Confidence
                 </div>
@@ -873,9 +1556,15 @@ export default function App() {
                 <div className="stat-value">
                   {confidence}%
                 </div>
+
               </div>
 
               <div className="stat">
+
+                <div className="stat-icon">
+                  🛡️
+                </div>
+
                 <div className="stat-label">
                   Risk
                 </div>
@@ -883,161 +1572,224 @@ export default function App() {
                 <div className="stat-value">
                   {risk}
                 </div>
+
               </div>
 
               <div className="stat">
+
+                <div className="stat-icon">
+                  ⚡
+                </div>
+
                 <div className="stat-label">
                   Action
                 </div>
 
                 <div className="stat-value">
-                  {formatAction(action)}
+                  {action}
                 </div>
+
               </div>
-            </section>
+
+            </div>
 
             {/* AI ANALYSIS */}
-            <section className="card" style={{ marginTop: 25 }}>
-              <div className="section-label">
-                AI DIAGNOSIS
+
+            <section className="card">
+
+              <div className="label">
+                AI VALIDATION
               </div>
 
-              <h2>Extraction analysis</h2>
-
               <div className="analysis">
+
                 <div className="analysis-box">
-                  <h3>Explanation</h3>
+
+                  <h3>
+                    Diagnosis
+                  </h3>
 
                   <p>
                     {analysis.explanation ||
-                      "No additional explanation was returned."}
+                      "The AI validation engine completed the analysis."}
                   </p>
+
                 </div>
 
                 <div className="analysis-box">
-                  <h3>Repair instruction</h3>
 
-                  <p>
-                    {analysis.repair_instruction ||
-                      "No repair was required."}
-                  </p>
-                </div>
-              </div>
+                  <h3>
+                    Issues detected
+                  </h3>
 
-              {analysis.issues &&
-                analysis.issues.length > 0 && (
-                  <div
-                    className="analysis-box"
-                    style={{ marginTop: 18 }}
-                  >
-                    <h3>Detected issues</h3>
+                  {issues.length > 0 ? (
 
                     <ul className="issues">
-                      {analysis.issues.map(
+
+                      {issues.map(
                         (issue, index) => (
-                          <li key={index}>{issue}</li>
+                          <li key={index}>
+                            {String(issue)}
+                          </li>
                         )
                       )}
-                    </ul>
-                  </div>
-                )}
-            </section>
 
-            {/* RECOVERY HISTORY */}
-            <section className="card history">
-              <div className="section-label">
-                AUDIT TRAIL
+                    </ul>
+
+                  ) : (
+
+                    <div className="no-issues">
+                      ✓ No extraction anomalies detected.
+                    </div>
+
+                  )}
+
+                </div>
+
               </div>
 
-              <h2>Recovery History</h2>
+              {analysis.repair_instruction && (
 
-              <p className="muted">
-                Every important extraction and recovery event
-                is recorded for transparency.
-              </p>
+                <div
+                  className="analysis-box"
+                  style={{
+                    marginTop: "20px",
+                  }}
+                >
 
-              {history.length === 0 ? (
-                <p className="muted">
-                  No pipeline events returned.
-                </p>
-              ) : (
-                history.map((item, index) => {
-                  const itemStatus =
-                    item.status || "completed";
+                  <h3>
+                    Repair strategy
+                  </h3>
 
-                  return (
+                  <p>
+                    {analysis.repair_instruction}
+                  </p>
+
+                </div>
+
+              )}
+
+            </section>
+
+            {/* PIPELINE HISTORY */}
+
+            {history.length > 0 && (
+
+              <section className="card">
+
+                <div className="label">
+                  EXECUTION PIPELINE
+                </div>
+
+                <h2>
+                  What ScrapeHeal did
+                </h2>
+
+                {history.map(
+                  (step, index) => (
+
                     <div
                       className="history-row"
                       key={index}
                     >
+
                       <div className="history-number">
-                        {item.step || index + 1}
+                        {step.step ||
+                          index + 1}
                       </div>
 
                       <div>
+
                         <div className="history-title">
-                          {formatAction(item.action)}
+                          {formatText(
+                            step.action ||
+                            "Pipeline Step"
+                          )}
                         </div>
 
-                        {item.issues?.length > 0 && (
-                          <div
-                            style={{
-                              color: "#667085",
-                              fontSize: 13,
-                              marginTop: 4,
-                            }}
-                          >
-                            {item.issues.join(", ")}
-                          </div>
+                        {step.issues &&
+                          Array.isArray(
+                            step.issues
+                          ) &&
+                          step.issues.length > 0 && (
+
+                            <div
+                              style={{
+                                color:
+                                  "#667085",
+                                fontSize:
+                                  "13px",
+                                marginTop:
+                                  "4px",
+                              }}
+                            >
+                              {step.issues.join(
+                                ", "
+                              )}
+                            </div>
+
+                          )}
+
+                      </div>
+
+                      <div className="history-status">
+                        {formatText(
+                          step.status ||
+                          "completed"
                         )}
                       </div>
 
-                      <div
-                        className={`history-status ${
-                          itemStatus === "failed"
-                            ? "failed"
-                            : itemStatus === "detected"
-                            ? "detected"
-                            : "completed"
-                        }`}
-                      >
-                        {itemStatus === "verified"
-                          ? "✓ Verified"
-                          : itemStatus === "failed"
-                          ? "✕ Failed"
-                          : itemStatus === "detected"
-                          ? "⚠ Detected"
-                          : "✓ Completed"}
-                      </div>
                     </div>
-                  );
-                })
-              )}
-            </section>
+
+                  )
+                )}
+
+              </section>
+
+            )}
 
             {/* FINAL DATA */}
-            <section className="card data-box">
-              <div className="section-label">
-                EXTRACTED DATA
-              </div>
 
-              <h2>Recovered data</h2>
+            {result.final_data !==
+              undefined && (
 
-              <p className="muted">
-                Data returned by the final extraction attempt.
-              </p>
+                <section className="card">
 
-              <pre className="data-preview">
-                {JSON.stringify(
-                  result.final_data,
-                  null,
-                  2
-                )}
-              </pre>
-            </section>
+                  <div className="label">
+                    RECOVERED DATA
+                  </div>
+
+                  <h2>
+                    Verified extraction
+                  </h2>
+
+                  <p className="description">
+                    Final data returned by
+                    the ScrapeHeal pipeline.
+                  </p>
+
+                  <div className="data-preview">
+                    {JSON.stringify(
+                      result.final_data,
+                      null,
+                      2
+                    )}
+                  </div>
+
+                </section>
+
+              )}
+
           </>
+
         )}
+
       </main>
+
+      <footer className="footer">
+        ScrapeHeal AI • Bright Data • Gemini AI • FastAPI • React
+      </footer>
+
     </div>
   );
 }
